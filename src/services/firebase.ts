@@ -10,14 +10,8 @@ import {
 import { doc, getDocFromServer, getFirestore } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
-const typedConfig = firebaseConfig as typeof firebaseConfig & {
-  firestoreDatabaseId?: string;
-};
-const app = initializeApp(typedConfig);
-export const db = getFirestore(
-  app,
-  typedConfig.firestoreDatabaseId || 'ai-studio-e59528c1-ec2e-4773-b813-c0dc5aba5684'
-);
+const app = initializeApp(firebaseConfig);
+export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 
 export const WORKSPACE_SCOPES = [
