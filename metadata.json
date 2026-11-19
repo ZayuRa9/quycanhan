@@ -1,0 +1,8 @@
+{
+  "name": "Remix Sổ Quỹ Cá Nhân",
+  "description": "Hệ thống quản lý tài chính cá nhân thực tế: theo dõi thu chi, ngân sách, đối chiếu tài khoản, xuất Excel và lưu trữ chứng từ tự động lên Google Drive.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

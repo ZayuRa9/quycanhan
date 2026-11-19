@@ -1,0 +1,147 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User workspace profile and Google Drive/Sheets linkage.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "email": { "type": "string", "minLength": 3, "maxLength": 256 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "driveRootFolderId": { "type": "string", "maxLength": 128 },
+        "spreadsheetId": { "type": "string", "maxLength": 128 },
+        "expenseCategories": { "type": "array", "description": "User-customized expense category list" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "displayName", "createdAt", "updatedAt"]
+    },
+    "FinancialAccount": {
+      "title": "FinancialAccount",
+      "description": "Cash fund, bank account, or e-wallet balance source.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "type": { "type": "string", "enum": ["cash", "bank", "ewallet"] },
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "bankName": { "type": "string", "maxLength": 120 },
+        "accountNumber": { "type": "string", "maxLength": 64 },
+        "initialBalance": { "type": "number" },
+        "currentBalance": { "type": "number" },
+        "actualVerifiedBalance": { "type": "number" },
+        "lastReconciledAt": { "type": "string", "maxLength": 40 },
+        "reconciliationAttachments": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "type", "name", "initialBalance", "currentBalance", "createdAt", "updatedAt"]
+    },
+    "CodeCounter": {
+      "title": "CodeCounter",
+      "description": "Monotonic transaction sequence counter per type and YYYY.MM.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "prefix": { "type": "string", "enum": ["KT", "KC"] },
+        "yearMonth": { "type": "string", "pattern": "^\\d{4}\\.\\d{2}$", "maxLength": 10 },
+        "lastSeq": { "type": "integer" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "prefix", "yearMonth", "lastSeq", "updatedAt"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "Personal income or expense ledger record with Drive proof metadata and audit history.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "code": { "type": "string", "pattern": "^(KT|KC)-\\d{4}\\.\\d{2}-\\d{2,}$", "maxLength": 32 },
+        "kind": { "type": "string", "enum": ["income", "expense"] },
+        "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "source": { "type": "string", "maxLength": 200 },
+        "amount": { "type": "number" },
+        "actualAmount": { "type": "number" },
+        "remainingAmount": { "type": "number" },
+        "category": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "method": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "accountId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "accountName": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "counterparty": { "type": "string", "maxLength": 200 },
+        "reason": { "type": "string", "maxLength": 500 },
+        "description": { "type": "string", "maxLength": 2000 },
+        "workDuration": { "type": "string", "maxLength": 120 },
+        "purposeTag": { "type": "string", "maxLength": 120 },
+        "startDate": { "type": "string", "maxLength": 20 },
+        "expectedDate": { "type": "string", "maxLength": 20 },
+        "actualDate": { "type": "string", "maxLength": 20 },
+        "status": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "isArchived": { "type": "boolean" },
+        "attachments": { "type": "array" },
+        "driveMetadataFileId": { "type": "string", "maxLength": 128 },
+        "calendarEventId": { "type": "string", "maxLength": 128 },
+        "taskItemId": { "type": "string", "maxLength": 128 },
+        "auditHistory": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "code", "kind", "name", "amount", "category", "method", "accountId", "accountName", "expectedDate", "status", "isArchived", "attachments", "auditHistory", "createdAt", "updatedAt"]
+    },
+    "BudgetLimit": {
+      "title": "BudgetLimit",
+      "description": "Spending budget threshold configured by category, month, purpose, or work.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "scopeType": { "type": "string", "enum": ["category", "month", "purpose", "work"] },
+        "scopeValue": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "yearMonth": { "type": "string", "minLength": 1, "maxLength": 10 },
+        "limitAmount": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "name", "scopeType", "scopeValue", "yearMonth", "limitAmount", "createdAt", "updatedAt"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable action audit trail for financial operations.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "entityType": { "type": "string", "enum": ["transaction", "account", "budget", "backup"] },
+        "entityCode": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "action": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "details": { "type": "string", "maxLength": 1000 },
+        "actorEmail": { "type": "string", "maxLength": 256 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "entityType", "entityCode", "action", "details", "actorEmail", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Private user profile and Drive/Sheets config"
+    },
+    "/users/{userId}/accounts/{accountId}": {
+      "schema": { "$ref": "#/entities/FinancialAccount" },
+      "description": "User financial accounts (cash, bank, e-wallet)"
+    },
+    "/users/{userId}/codeCounters/{counterId}": {
+      "schema": { "$ref": "#/entities/CodeCounter" },
+      "description": "Monotonic transaction code sequence counters"
+    },
+    "/users/{userId}/transactions/{transactionId}": {
+      "schema": { "$ref": "#/entities/Transaction" },
+      "description": "User income and expense transactions"
+    },
+    "/users/{userId}/budgets/{budgetId}": {
+      "schema": { "$ref": "#/entities/BudgetLimit" },
+      "description": "User spending budget limits"
+    },
+    "/users/{userId}/auditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "User financial operation audit logs"
+    }
+  }
+}

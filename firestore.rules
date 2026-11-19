@@ -1,0 +1,240 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\.\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'displayName', 'driveRootFolderId', 'spreadsheetId', 'expenseCategories', 'createdAt', 'updatedAt'])
+        && data.uid == userId
+        && data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 256
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 128
+        && (!('driveRootFolderId' in data) || (data.driveRootFolderId is string && data.driveRootFolderId.size() <= 128))
+        && (!('spreadsheetId' in data) || (data.spreadsheetId is string && data.spreadsheetId.size() <= 128))
+        && (!('expenseCategories' in data) || (data.expenseCategories is list && data.expenseCategories.size() >= 1 && data.expenseCategories.size() <= 100))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAccount(data, userId) {
+      return data.keys().hasAll(['userId', 'type', 'name', 'initialBalance', 'currentBalance', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'type', 'name', 'bankName', 'accountNumber', 'initialBalance', 'currentBalance', 'actualVerifiedBalance', 'lastReconciledAt', 'reconciliationAttachments', 'createdAt', 'updatedAt'])
+        && data.userId == userId
+        && data.type in ['cash', 'bank', 'ewallet']
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && (!('bankName' in data) || (data.bankName is string && data.bankName.size() <= 120))
+        && (!('accountNumber' in data) || (data.accountNumber is string && data.accountNumber.size() <= 64))
+        && data.initialBalance is number
+        && data.currentBalance is number
+        && (!('actualVerifiedBalance' in data) || data.actualVerifiedBalance is number)
+        && (!('lastReconciledAt' in data) || (data.lastReconciledAt is string && data.lastReconciledAt.size() <= 40))
+        && (!('reconciliationAttachments' in data) || (data.reconciliationAttachments is list && data.reconciliationAttachments.size() <= 10))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCodeCounter(data, userId) {
+      return data.keys().hasAll(['userId', 'prefix', 'yearMonth', 'lastSeq', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'prefix', 'yearMonth', 'lastSeq', 'updatedAt'])
+        && data.userId == userId
+        && data.prefix in ['KT', 'KC']
+        && data.yearMonth is string && data.yearMonth.size() <= 10 && data.yearMonth.matches('^\\d{4}\\.\\d{2}$')
+        && data.lastSeq is int && data.lastSeq >= 1
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTransaction(data, userId) {
+      return data.keys().hasAll([
+          'userId', 'code', 'kind', 'name', 'amount', 'category', 'method',
+          'accountId', 'accountName', 'expectedDate', 'status', 'isArchived',
+          'attachments', 'auditHistory', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'userId', 'code', 'kind', 'name', 'source', 'amount', 'actualAmount',
+          'remainingAmount', 'category', 'method', 'accountId', 'accountName',
+          'counterparty', 'reason', 'description', 'workDuration', 'purposeTag',
+          'startDate', 'expectedDate', 'actualDate', 'status', 'isArchived',
+          'attachments', 'driveMetadataFileId', 'calendarEventId', 'taskItemId',
+          'auditHistory', 'createdAt', 'updatedAt'
+        ])
+        && data.userId == userId
+        && data.code is string && data.code.size() <= 32 && data.code.matches('^(KT|KC)-\\d{4}\\.\\d{2}-\\d{2,}$')
+        && data.kind in ['income', 'expense']
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 200
+        && (!('source' in data) || (data.source is string && data.source.size() <= 200))
+        && data.amount is number && data.amount >= 0
+        && (!('actualAmount' in data) || (data.actualAmount is number && data.actualAmount >= 0))
+        && (!('remainingAmount' in data) || (data.remainingAmount is number && data.remainingAmount >= 0))
+        && data.category is string && data.category.size() >= 1 && data.category.size() <= 100
+        && data.method is string && data.method.size() >= 1 && data.method.size() <= 80
+        && data.accountId is string && data.accountId.size() >= 1 && data.accountId.size() <= 128
+        && data.accountName is string && data.accountName.size() >= 1 && data.accountName.size() <= 150
+        && (!('counterparty' in data) || (data.counterparty is string && data.counterparty.size() <= 200))
+        && (!('reason' in data) || (data.reason is string && data.reason.size() <= 500))
+        && (!('description' in data) || (data.description is string && data.description.size() <= 2000))
+        && (!('workDuration' in data) || (data.workDuration is string && data.workDuration.size() <= 120))
+        && (!('purposeTag' in data) || (data.purposeTag is string && data.purposeTag.size() <= 120))
+        && (!('startDate' in data) || (data.startDate is string && data.startDate.size() <= 20))
+        && data.expectedDate is string && data.expectedDate.size() <= 20
+        && (!('actualDate' in data) || (data.actualDate is string && data.actualDate.size() <= 20))
+        && data.status is string && data.status.size() >= 1 && data.status.size() <= 40
+        && data.isArchived is bool
+        && data.attachments is list && data.attachments.size() <= 20
+        && (!('driveMetadataFileId' in data) || (data.driveMetadataFileId is string && data.driveMetadataFileId.size() <= 128))
+        && (!('calendarEventId' in data) || (data.calendarEventId is string && data.calendarEventId.size() <= 128))
+        && (!('taskItemId' in data) || (data.taskItemId is string && data.taskItemId.size() <= 128))
+        && data.auditHistory is list && data.auditHistory.size() <= 100
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBudget(data, userId) {
+      return data.keys().hasAll(['userId', 'name', 'scopeType', 'scopeValue', 'yearMonth', 'limitAmount', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'name', 'scopeType', 'scopeValue', 'yearMonth', 'limitAmount', 'createdAt', 'updatedAt'])
+        && data.userId == userId
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 150
+        && data.scopeType in ['category', 'month', 'purpose', 'work']
+        && data.scopeValue is string && data.scopeValue.size() >= 1 && data.scopeValue.size() <= 150
+        && data.yearMonth is string && data.yearMonth.size() >= 1 && data.yearMonth.size() <= 10
+        && data.limitAmount is number && data.limitAmount > 0
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAuditLog(data, userId) {
+      return data.keys().hasAll(['userId', 'entityType', 'entityCode', 'action', 'details', 'actorEmail', 'createdAt'])
+        && data.keys().hasOnly(['userId', 'entityType', 'entityCode', 'action', 'details', 'actorEmail', 'createdAt'])
+        && data.userId == userId
+        && data.entityType in ['transaction', 'account', 'budget', 'backup']
+        && data.entityCode is string && data.entityCode.size() >= 1 && data.entityCode.size() <= 120
+        && data.action is string && data.action.size() >= 1 && data.action.size() <= 120
+        && data.details is string && data.details.size() <= 1000
+        && data.actorEmail is string && data.actorEmail.size() <= 256
+        && data.createdAt is timestamp;
+    }
+
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow create: if isOwner(userId) && isValidId(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isOwner(userId) && isValidId(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'displayName', 'driveRootFolderId', 'spreadsheetId', 'expenseCategories', 'updatedAt']);
+
+      match /accounts/{accountId} {
+        allow get: if isOwner(userId) && isValidId(accountId);
+        allow list: if isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow create: if isOwner(userId) && isValidId(accountId)
+          && isValidAccount(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isOwner(userId) && isValidId(accountId)
+          && isValidAccount(incoming(), userId)
+          && incoming().userId == existing().userId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'type', 'name', 'bankName', 'accountNumber', 'initialBalance',
+            'currentBalance', 'actualVerifiedBalance', 'lastReconciledAt',
+            'reconciliationAttachments', 'updatedAt'
+          ]);
+        allow delete: if isOwner(userId) && isValidId(accountId);
+      }
+
+      match /codeCounters/{counterId} {
+        allow get: if isOwner(userId) && isValidId(counterId);
+        allow list: if isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow create: if isOwner(userId) && isValidId(counterId)
+          && isValidCodeCounter(incoming(), userId)
+          && incoming().updatedAt == request.time;
+        allow update: if isOwner(userId) && isValidId(counterId)
+          && isValidCodeCounter(incoming(), userId)
+          && incoming().userId == existing().userId
+          && incoming().prefix == existing().prefix
+          && incoming().yearMonth == existing().yearMonth
+          && incoming().lastSeq > existing().lastSeq
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['lastSeq', 'updatedAt']);
+      }
+
+      match /transactions/{transactionId} {
+        allow get: if isOwner(userId) && isValidId(transactionId);
+        allow list: if isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow create: if isOwner(userId) && isValidId(transactionId)
+          && isValidTransaction(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isOwner(userId) && isValidId(transactionId)
+          && isValidTransaction(incoming(), userId)
+          && incoming().userId == existing().userId
+          && incoming().code == existing().code
+          && incoming().kind == existing().kind
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'name', 'source', 'amount', 'actualAmount', 'remainingAmount',
+            'category', 'method', 'accountId', 'accountName', 'counterparty',
+            'reason', 'description', 'workDuration', 'purposeTag', 'startDate',
+            'expectedDate', 'actualDate', 'status', 'isArchived', 'attachments',
+            'driveMetadataFileId', 'calendarEventId', 'taskItemId', 'auditHistory',
+            'updatedAt'
+          ]);
+        allow delete: if isOwner(userId) && isValidId(transactionId);
+      }
+
+      match /budgets/{budgetId} {
+        allow get: if isOwner(userId) && isValidId(budgetId);
+        allow list: if isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow create: if isOwner(userId) && isValidId(budgetId)
+          && isValidBudget(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isOwner(userId) && isValidId(budgetId)
+          && isValidBudget(incoming(), userId)
+          && incoming().userId == existing().userId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'name', 'scopeType', 'scopeValue', 'yearMonth', 'limitAmount', 'updatedAt'
+          ]);
+        allow delete: if isOwner(userId) && isValidId(budgetId);
+      }
+
+      match /auditLogs/{logId} {
+        allow get: if isOwner(userId) && isValidId(logId);
+        allow list: if isOwner(userId) && resource.data.userId == request.auth.uid;
+        allow create: if isOwner(userId) && isValidId(logId)
+          && isValidAuditLog(incoming(), userId)
+          && incoming().createdAt == request.time;
+      }
+    }
+  }
+}
