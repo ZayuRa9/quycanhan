@@ -17,6 +17,7 @@ import {
 interface ReminderCenterProps {
   transactions: Transaction[];
   userEmail?: string;
+  defaultLeadDays?: number;
   pushPermission: NotificationPermission | 'unsupported';
   pushEnabled: boolean;
   onTogglePush: () => void;
@@ -26,12 +27,16 @@ interface ReminderCenterProps {
 export const ReminderCenter: React.FC<ReminderCenterProps> = ({
   transactions,
   userEmail,
+  defaultLeadDays = 3,
   pushPermission,
   pushEnabled,
   onTogglePush,
   onSelectTransaction,
 }) => {
-  const [leadDays, setLeadDays] = useState<number>(3);
+  const [leadDays, setLeadDays] = useState<number>(defaultLeadDays);
+  React.useEffect(() => {
+    setLeadDays(defaultLeadDays);
+  }, [defaultLeadDays]);
   const todayIso = new Date().toISOString().slice(0, 10);
 
   const reminders = useMemo(
@@ -49,7 +54,12 @@ export const ReminderCenter: React.FC<ReminderCenterProps> = ({
       `[Sổ Quỹ Cá Nhân] Nhắc nhở ${reminders.length} giao dịch (${formatDateVN(todayIso)})`
     );
     const lines = reminders.map((r, idx) => {
-      const kindLabel = r.transaction.kind === 'income' ? 'THU' : 'CHI';
+      const kindLabel =
+        r.transaction.kind === 'income'
+          ? 'THU'
+          : r.transaction.kind === 'transfer'
+          ? 'CHUYỂN KHOẢN'
+          : 'CHI';
       return `${idx + 1}. [${kindLabel}] ${r.transaction.code} — ${r.transaction.name}\n   Số tiền: ${formatVND(r.transaction.amount)} | ${r.message}`;
     });
     const body = encodeURIComponent(
@@ -106,6 +116,7 @@ export const ReminderCenter: React.FC<ReminderCenterProps> = ({
             <option value={1}>Nhắc trước 1 ngày</option>
             <option value={3}>Nhắc trước 3 ngày</option>
             <option value={7}>Nhắc trước 7 ngày</option>
+            <option value={14}>Nhắc trước 14 ngày</option>
           </select>
 
           {pushPermission !== 'unsupported' && (
@@ -198,6 +209,7 @@ export const ReminderCenter: React.FC<ReminderCenterProps> = ({
                     </div>
                     <p className="text-slate-500">
                       {message} · Tài khoản: {tx.accountName}
+                      {tx.kind === 'transfer' && tx.toAccountName ? ` → ${tx.toAccountName}` : ''}
                     </p>
                   </div>
                 </div>
@@ -205,10 +217,14 @@ export const ReminderCenter: React.FC<ReminderCenterProps> = ({
                 <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0">
                   <span
                     className={`font-mono font-bold tabular-nums ${
-                      tx.kind === 'income' ? 'text-emerald-700' : 'text-rose-600'
+                      tx.kind === 'income'
+                        ? 'text-emerald-700'
+                        : tx.kind === 'transfer'
+                        ? 'text-blue-700'
+                        : 'text-rose-600'
                     }`}
                   >
-                    {tx.kind === 'income' ? '+' : '-'}
+                    {tx.kind === 'income' ? '+' : tx.kind === 'transfer' ? '⇄ ' : '-'}
                     {formatVND(tx.amount)}
                   </span>
 

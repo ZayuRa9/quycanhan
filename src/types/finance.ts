@@ -1,4 +1,4 @@
-export type TransactionKind = 'income' | 'expense';
+export type TransactionKind = 'income' | 'expense' | 'transfer';
 
 export const TRANSACTION_STATUSES = [
   'Dự kiến',
@@ -23,9 +23,18 @@ export type ExpenseStatus =
 
 export type TransactionStatus = IncomeStatus | ExpenseStatus;
 
-export type AccountType = 'cash' | 'bank' | 'ewallet';
+export type AccountType = 'cash' | 'bank' | 'ewallet' | 'savings';
 
 export type BudgetScopeType = 'category' | 'month' | 'purpose' | 'work';
+
+export type SavingsGoalStatus = 'active' | 'completed' | 'paused';
+
+export type BackupRecordType =
+  | 'manual_export'
+  | 'pre_restore_snapshot'
+  | 'restore'
+  | 'drive_backup'
+  | 'excel_import';
 
 export interface DriveAttachment {
   id: string;
@@ -63,6 +72,8 @@ export interface Transaction {
   method: string;
   accountId: string;
   accountName: string;
+  toAccountId?: string;
+  toAccountName?: string;
   counterparty?: string;
   reason?: string;
   description?: string;
@@ -110,10 +121,52 @@ export interface BudgetLimit {
   updatedAt?: unknown;
 }
 
+export interface SavingsGoal {
+  id: string;
+  userId: string;
+  name: string;
+  targetAmount: number;
+  currentAmount: number;
+  targetDate?: string;
+  linkedAccountId?: string;
+  linkedAccountName?: string;
+  category?: string;
+  status: SavingsGoalStatus;
+  note?: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface SavingsContribution {
+  id: string;
+  userId: string;
+  goalId: string;
+  goalName: string;
+  type: 'deposit' | 'withdraw';
+  amount: number;
+  accountId?: string;
+  accountName?: string;
+  date: string;
+  note?: string;
+  createdAt?: unknown;
+}
+
+export interface BackupRecord {
+  id: string;
+  userId: string;
+  type: BackupRecordType;
+  recordCount: number;
+  fileName: string;
+  driveFileId?: string;
+  driveWebViewLink?: string;
+  note?: string;
+  createdAt?: unknown;
+}
+
 export interface AuditLog {
   id: string;
   userId: string;
-  entityType: 'transaction' | 'account' | 'budget' | 'backup';
+  entityType: 'transaction' | 'account' | 'budget' | 'backup' | 'savings' | 'settings';
   entityCode: string;
   action: string;
   details: string;
@@ -128,6 +181,12 @@ export interface UserProfile {
   driveRootFolderId?: string;
   spreadsheetId?: string;
   expenseCategories?: string[];
+  incomeCategories?: string[];
+  reminderLeadDays?: number;
+  defaultPageSize?: number;
+  autoPreRestoreBackup?: boolean;
+  lastDriveBackupAt?: string;
+  lastDriveBackupFileId?: string;
   createdAt?: unknown;
   updatedAt?: unknown;
 }
@@ -197,3 +256,28 @@ export const EXPENSE_STATUSES: CanonicalTransactionStatus[] = [
   'Đã thực hiện',
   'Đã hủy',
 ];
+
+export const TRANSFER_CATEGORIES = [
+  'Chuyển khoản nội bộ',
+  'Nạp ví điện tử',
+  'Rút tiền mặt',
+  'Gửi tiết kiệm',
+  'Điều chuyển quỹ',
+] as const;
+
+export const TRANSFER_METHODS = [
+  'Chuyển khoản ngân hàng',
+  'Ví điện tử',
+  'Tiền mặt',
+  'Hình thức khác',
+] as const;
+
+export const SAVINGS_CATEGORIES = [
+  'Quỹ dự phòng khẩn cấp',
+  'Mua sắm & Trang thiết bị',
+  'Du lịch & Trải nghiệm',
+  'Giáo dục & Phát triển',
+  'Đầu tư & Tích sản',
+  'Nhà cửa & Phương tiện',
+  'Mục tiêu khác',
+] as const;

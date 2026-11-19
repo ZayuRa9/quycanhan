@@ -2,8 +2,10 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowDownLeft,
+  ArrowLeftRight,
   ArrowUpRight,
   Plus,
+  SlidersHorizontal,
   X,
 } from 'lucide-react';
 import {
@@ -12,6 +14,8 @@ import {
   INCOME_CATEGORIES,
   INCOME_METHODS,
   TRANSACTION_STATUSES,
+  TRANSFER_CATEGORIES,
+  TRANSFER_METHODS,
   type CanonicalTransactionStatus,
   type DriveAttachment,
   type FinancialAccount,
@@ -21,8 +25,10 @@ import {
 import {
   buildDriveAttachmentName,
   getFileExtension,
+  getTransactionCodePrefix,
   getYearMonthDot,
   isTransactionCancelled,
+  toVndInt,
   validateTransactionStatusChange,
 } from '../utils/financeRules';
 import { resolveKeyboardShortcut } from '../utils/keyboardShortcuts';
@@ -34,6 +40,11 @@ interface QuickTransactionModalProps {
   onClose: () => void;
   accounts: FinancialAccount[];
   expenseCategories: string[];
+  incomeCategories?: string[];
+  onOpenCategoryManager?: (
+    currentCategory: string,
+    onSelect: (category: string) => void
+  ) => void;
   hasDriveToken: boolean;
   onReconnectDrive: () => void;
   onPeekCode: (kind: TransactionKind, dateForCode: string) => Promise<string>;
@@ -51,6 +62,8 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
   onClose,
   accounts,
   expenseCategories,
+  incomeCategories,
+  onOpenCategoryManager,
   hasDriveToken,
   onReconnectDrive,
   onPeekCode,
@@ -59,6 +72,7 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
   const todayIso = new Date().toISOString().slice(0, 10);
   const nameInputRef = useRef<HTMLInputElement | null>(null);
   const formRef = useRef<HTMLFormElement | null>(null);
+  const wasOpenRef = useRef(false);
 
   const [kind, setKind] = useState<TransactionKind>('expense');
   const [previewCode, setPreviewCode] = useState<string>('...');
@@ -69,6 +83,7 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
   );
   const [method, setMethod] = useState<string>(EXPENSE_METHODS[0]);
   const [accountId, setAccountId] = useState<string>(accounts[0]?.id || '');
+  const [toAccountId, setToAccountId] = useState<string>(accounts[1]?.id || '');
   const [expectedDate, setExpectedDate] = useState(todayIso);
   const [actualDate, setActualDate] = useState('');
   const [status, setStatus] = useState<CanonicalTransactionStatus>('Dự kiến');
@@ -78,31 +93,42 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  // Reset form cleanly whenever opened
   useEffect(() => {
-    if (!open) return;
-    const defaultKind: TransactionKind = 'expense';
-    setKind(defaultKind);
-    setName('');
-    setAmount('');
-    setCategory(expenseCategories[0] || EXPENSE_CATEGORIES[0]);
-    setMethod(EXPENSE_METHODS[0]);
-    setAccountId(accounts[0]?.id || '');
-    setExpectedDate(todayIso);
-    setActualDate('');
-    setStatus('Dự kiến');
-    setMarkArchived(false);
-    setDescription('');
-    setQueuedFiles([]);
-    setFormError(null);
+    if (open && !wasOpenRef.current) {
+      wasOpenRef.current = true;
+      const defaultKind: TransactionKind = 'expense';
+      setKind(defaultKind);
+      setName('');
+      setAmount('');
+      setCategory(expenseCategories[0] || EXPENSE_CATEGORIES[0]);
+      setMethod(EXPENSE_METHODS[0]);
+      setAccountId(accounts[0]?.id || '');
+      setToAccountId(accounts.find((a) => a.id !== accounts[0]?.id)?.id || '');
+      setExpectedDate(todayIso);
+      setActualDate('');
+      setStatus('Dự kiến');
+      setMarkArchived(false);
+      setDescription('');
+      setQueuedFiles([]);
+      setFormError(null);
 
-    const timer = window.setTimeout(() => {
-      nameInputRef.current?.focus();
-    }, 30);
-    return () => window.clearTimeout(timer);
+      const timer = window.setTimeout(() => {
+        nameInputRef.current?.focus();
+      }, 30);
+      return () => window.clearTimeout(timer);
+    }
+    if (!open) {
+      wasOpenRef.current = false;
+    }
   }, [open, accounts, expenseCategories, todayIso]);
 
-  // Refresh preview code when kind or expectedDate changes
+  useEffect(() => {
+    if (!open || kind !== 'expense' || expenseCategories.length === 0) return;
+    if (!expenseCategories.includes(category)) {
+      setCategory(expenseCategories[0]);
+    }
+  }, [open, kind, expenseCategories, category]);
+
   useEffect(() => {
     if (!open) return;
     let active = true;
@@ -114,7 +140,7 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
       .catch(() => {
         if (active) {
           setPreviewCode(
-            `${kind === 'income' ? 'KT' : 'KC'}-${getYearMonthDot(dateRef)}-01`
+            `${getTransactionCodePrefix(kind)}-${getYearMonthDot(dateRef)}-01`
           );
         }
       });
@@ -126,21 +152,47 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
   if (!open) return null;
 
   const isIncome = kind === 'income';
+  const isTransfer = kind === 'transfer';
+
+  const incomeCatList =
+    incomeCategories && incomeCategories.length > 0
+      ? incomeCategories
+      : [...INCOME_CATEGORIES];
+  const expenseCatList =
+    expenseCategories.length > 0
+      ? expenseCategories
+      : [...EXPENSE_CATEGORIES];
+
   const categoryOptions = isIncome
-    ? [...INCOME_CATEGORIES]
-    : expenseCategories.length > 0
-    ? expenseCategories
-    : [...EXPENSE_CATEGORIES];
-  const methodOptions = isIncome ? [...INCOME_METHODS] : [...EXPENSE_METHODS];
+    ? incomeCatList
+    : isTransfer
+    ? [...TRANSFER_CATEGORIES]
+    : expenseCatList;
+  const methodOptions = isIncome
+    ? [...INCOME_METHODS]
+    : isTransfer
+    ? [...TRANSFER_METHODS]
+    : [...EXPENSE_METHODS];
 
   const handleSwitchKind = (nextKind: TransactionKind) => {
     setKind(nextKind);
     setCategory(
       nextKind === 'income'
-        ? INCOME_CATEGORIES[0]
-        : expenseCategories[0] || EXPENSE_CATEGORIES[0]
+        ? incomeCatList[0]
+        : nextKind === 'transfer'
+        ? TRANSFER_CATEGORIES[0]
+        : expenseCatList[0]
     );
-    setMethod(nextKind === 'income' ? INCOME_METHODS[0] : EXPENSE_METHODS[0]);
+    setMethod(
+      nextKind === 'income'
+        ? INCOME_METHODS[0]
+        : nextKind === 'transfer'
+        ? TRANSFER_METHODS[0]
+        : EXPENSE_METHODS[0]
+    );
+    if (nextKind === 'transfer' && (!toAccountId || toAccountId === accountId)) {
+      setToAccountId(accounts.find((a) => a.id !== accountId)?.id || '');
+    }
     setFormError(null);
   };
 
@@ -178,20 +230,29 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
 
     if (accounts.length === 0) {
       setFormError(
-        'Bạn chưa có nguồn tiền nào. Vui lòng tạo tài khoản tại Thu & Chi -> Ngân sách hiện có.'
+        'Bạn chưa có nguồn tiền nào. Vui lòng tạo tài khoản tại phân hệ Tài khoản (phím 3).'
       );
       return;
     }
 
     const selectedAccount = accounts.find((a) => a.id === accountId);
     if (!selectedAccount) {
-      setFormError('Vui lòng chọn tài khoản nhận / thanh toán hợp lệ.');
+      setFormError('Vui lòng chọn tài khoản hợp lệ.');
       return;
     }
 
-    const numAmount = Number(amount);
+    const targetAccount = isTransfer
+      ? accounts.find((a) => a.id === toAccountId)
+      : undefined;
+
+    if (isTransfer && accounts.length < 2) {
+      setFormError('Cần ít nhất 2 tài khoản để thực hiện chuyển khoản nội bộ.');
+      return;
+    }
+
+    const numAmount = toVndInt(Number(amount));
     if (!name.trim() || !Number.isFinite(numAmount) || numAmount <= 0) {
-      setFormError('Vui lòng nhập tên giao dịch và số tiền lớn hơn 0.');
+      setFormError('Vui lòng nhập tên giao dịch và số tiền nguyên VNĐ lớn hơn 0.');
       return;
     }
 
@@ -210,7 +271,7 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
 
     const shouldArchive =
       !isTransactionCancelled(status) &&
-      (markArchived || (!isIncome && status === 'Đã thực hiện'));
+      (markArchived || (kind === 'expense' && status === 'Đã thực hiện'));
 
     const validation = validateTransactionStatusChange(
       kind,
@@ -218,7 +279,8 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
       actualDate,
       simulatedProofList,
       accountId,
-      shouldArchive
+      shouldArchive,
+      isTransfer ? toAccountId : undefined
     );
     if (!validation.valid) {
       setFormError(validation.error || 'Chưa đủ điều kiện cập nhật trạng thái.');
@@ -234,23 +296,32 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
 
     setSubmitting(true);
     try {
+      const draft: Omit<
+        Transaction,
+        'id' | 'userId' | 'code' | 'auditHistory' | 'createdAt' | 'updatedAt'
+      > & { dateForCode: string } = {
+        kind,
+        name: name.trim(),
+        amount: numAmount,
+        category,
+        method,
+        accountId: selectedAccount.id,
+        accountName: selectedAccount.name,
+        description: description.trim() || undefined,
+        expectedDate: expectedDate || todayIso,
+        actualDate: actualDate || undefined,
+        status,
+        isArchived: shouldArchive,
+        attachments: [],
+        dateForCode: expectedDate || todayIso,
+      };
+      if (isTransfer && targetAccount) {
+        draft.toAccountId = targetAccount.id;
+        draft.toAccountName = targetAccount.name;
+      }
+
       await onSaveNewTransaction({
-        draft: {
-          kind,
-          name: name.trim(),
-          amount: numAmount,
-          category,
-          method,
-          accountId: selectedAccount.id,
-          accountName: selectedAccount.name,
-          description: description.trim() || undefined,
-          expectedDate: expectedDate || todayIso,
-          actualDate: actualDate || undefined,
-          status,
-          isArchived: shouldArchive,
-          attachments: [],
-          dateForCode: expectedDate || todayIso,
-        },
+        draft,
         queuedFiles,
       });
       onClose();
@@ -294,11 +365,12 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
         onKeyDown={handleModalKeyDown}
         className="w-full max-w-2xl bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
       >
-        {/* Header */}
         <div
           className={`px-6 py-4 text-white flex items-center justify-between gap-3 ${
             isIncome
               ? 'bg-gradient-to-r from-emerald-600 to-teal-600'
+              : isTransfer
+              ? 'bg-gradient-to-r from-blue-600 to-indigo-700'
               : 'bg-gradient-to-r from-rose-600 to-orange-500'
           }`}
         >
@@ -306,6 +378,8 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
             <div className="w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center shrink-0">
               {isIncome ? (
                 <ArrowDownLeft className="w-4 h-4" />
+              ) : isTransfer ? (
+                <ArrowLeftRight className="w-4 h-4" />
               ) : (
                 <ArrowUpRight className="w-4 h-4" />
               )}
@@ -330,7 +404,6 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
           </button>
         </div>
 
-        {/* Form Body */}
         <form
           ref={formRef}
           onSubmit={handleSubmit}
@@ -338,12 +411,12 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
         >
           {/* Kind Switcher */}
           <div className="flex items-center justify-between gap-3 flex-wrap">
-            <div className="inline-flex p-1 bg-slate-100 rounded-xl">
+            <div className="inline-flex p-1 bg-slate-100 rounded-xl flex-wrap">
               <button
                 type="button"
                 onClick={() => handleSwitchKind('expense')}
-                className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${
-                  !isIncome
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${
+                  kind === 'expense'
                     ? 'bg-rose-600 text-white shadow-xs'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
@@ -354,7 +427,7 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
               <button
                 type="button"
                 onClick={() => handleSwitchKind('income')}
-                className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${
                   isIncome
                     ? 'bg-emerald-600 text-white shadow-xs'
                     : 'text-slate-600 hover:text-slate-900'
@@ -363,12 +436,30 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
                 <ArrowDownLeft className="w-3.5 h-3.5" />
                 <span>Khoản thu (KT)</span>
               </button>
+              <button
+                type="button"
+                onClick={() => handleSwitchKind('transfer')}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${
+                  isTransfer
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <ArrowLeftRight className="w-3.5 h-3.5" />
+                <span>Chuyển khoản (CK)</span>
+              </button>
             </div>
 
             <span className="text-xs font-mono font-bold text-slate-600">
               Mã dự kiến: {previewCode}
             </span>
           </div>
+
+          {isTransfer && (
+            <div className="p-3 rounded-xl bg-blue-50/90 border border-blue-200 text-xs text-blue-900">
+              Chuyển khoản nội bộ chỉ điều chuyển số dư giữa 2 tài khoản và không tính vào Tổng thu / Tổng chi.
+            </div>
+          )}
 
           {formError && (
             <div
@@ -380,14 +471,17 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
             </div>
           )}
 
-          {/* Row 1: Name & Amount */}
           <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
             <div className="sm:col-span-7">
               <label
                 htmlFor="quick-tx-name"
                 className="block text-xs font-semibold text-slate-700 mb-1"
               >
-                {isIncome ? 'Tên khoản thu *' : 'Tên khoản chi *'}
+                {isIncome
+                  ? 'Tên khoản thu *'
+                  : isTransfer
+                  ? 'Nội dung chuyển khoản *'
+                  : 'Tên khoản chi *'}
               </label>
               <input
                 ref={nameInputRef}
@@ -396,7 +490,13 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
                 required
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder={isIncome ? 'VD: Lương tháng 11' : 'VD: Tiền điện tháng 11'}
+                placeholder={
+                  isIncome
+                    ? 'VD: Lương tháng 11'
+                    : isTransfer
+                    ? 'VD: Nạp quỹ tiết kiệm tháng 11'
+                    : 'VD: Tiền điện tháng 11'
+                }
                 className="w-full h-10 px-3 text-sm bg-slate-50/70 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-600 focus:bg-white"
               />
             </div>
@@ -422,15 +522,31 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
             </div>
           </div>
 
-          {/* Row 2: Category, Account, Method */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className={`grid grid-cols-1 ${isTransfer ? 'sm:grid-cols-2 lg:grid-cols-4' : 'sm:grid-cols-3'} gap-3`}>
             <div>
-              <label
-                htmlFor="quick-tx-category"
-                className="block text-xs font-semibold text-slate-700 mb-1"
-              >
-                {isIncome ? 'Loại thu *' : 'Danh mục chi tiêu *'}
-              </label>
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <label
+                  htmlFor="quick-tx-category"
+                  className="block text-xs font-semibold text-slate-700 truncate"
+                >
+                  {isIncome ? 'Loại thu *' : isTransfer ? 'Loại chuyển *' : 'Danh mục chi *'}
+                </label>
+                {kind === 'expense' && onOpenCategoryManager && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onOpenCategoryManager(category, (nextCat) =>
+                        setCategory(nextCat)
+                      )
+                    }
+                    aria-label="Mở hộp thoại sắp xếp và thêm danh mục chi tiêu"
+                    className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold rounded-md border bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200 transition-colors shrink-0 whitespace-nowrap"
+                  >
+                    <SlidersHorizontal className="w-3 h-3" />
+                    <span>Sắp xếp</span>
+                  </button>
+                )}
+              </div>
               <select
                 id="quick-tx-category"
                 value={category}
@@ -442,6 +558,9 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
                     {cat}
                   </option>
                 ))}
+                {category && !categoryOptions.includes(category) && (
+                  <option value={category}>{category}</option>
+                )}
               </select>
             </div>
 
@@ -450,7 +569,7 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
                 htmlFor="quick-tx-account"
                 className="block text-xs font-semibold text-slate-700 mb-1"
               >
-                {isIncome ? 'Tài khoản nhận *' : 'Nguồn tiền chi *'}
+                {isIncome ? 'Tài khoản nhận *' : isTransfer ? 'Từ tài khoản *' : 'Nguồn tiền chi *'}
               </label>
               <select
                 id="quick-tx-account"
@@ -469,6 +588,32 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
                 )}
               </select>
             </div>
+
+            {isTransfer && (
+              <div>
+                <label
+                  htmlFor="quick-tx-to-account"
+                  className="block text-xs font-semibold text-slate-700 mb-1"
+                >
+                  Đến tài khoản *
+                </label>
+                <select
+                  id="quick-tx-to-account"
+                  value={toAccountId}
+                  onChange={(e) => setToAccountId(e.target.value)}
+                  className="w-full h-10 px-2.5 text-sm bg-slate-50/70 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-600 focus:bg-white"
+                >
+                  <option value="">Chọn tài khoản đích</option>
+                  {accounts
+                    .filter((a) => a.id !== accountId)
+                    .map((acc) => (
+                      <option key={acc.id} value={acc.id}>
+                        {acc.name}
+                      </option>
+                    ))}
+                </select>
+              </div>
+            )}
 
             <div>
               <label
@@ -492,14 +637,13 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
             </div>
           </div>
 
-          {/* Row 3: Expected Date, Actual Date, Note */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label
                 htmlFor="quick-tx-expected-date"
                 className="block text-xs font-semibold text-slate-700 mb-1"
               >
-                {isIncome ? 'Ngày dự kiến nhận' : 'Ngày dự kiến chi'}
+                {isIncome ? 'Ngày dự kiến nhận' : isTransfer ? 'Ngày dự kiến chuyển' : 'Ngày dự kiến chi'}
               </label>
               <input
                 id="quick-tx-expected-date"
@@ -515,7 +659,7 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
                 htmlFor="quick-tx-actual-date"
                 className="block text-xs font-semibold text-slate-700 mb-1"
               >
-                {isIncome ? 'Ngày thực nhận' : 'Ngày chính thức chi'}
+                {isIncome ? 'Ngày thực nhận' : isTransfer ? 'Ngày thực chuyển' : 'Ngày chính thức chi'}
               </label>
               <input
                 id="quick-tx-actual-date"
@@ -544,7 +688,6 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
             </div>
           </div>
 
-          {/* Row 4: 3 Status Color Options + Archive Checkbox */}
           <div className="space-y-2">
             <span className="block text-xs font-semibold text-slate-700">
               Trạng thái giao dịch *
@@ -587,12 +730,15 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
                   onChange={(e) => setMarkArchived(e.target.checked)}
                   className="rounded border-slate-300 text-blue-600 focus:ring-blue-600"
                 />
-                <span>Chuyển vào Lưu trữ sau khi hoàn tất (cần chứng từ)</span>
+                <span>
+                  {isTransfer
+                    ? 'Chuyển vào Lưu trữ sau khi hoàn tất'
+                    : 'Chuyển vào Lưu trữ sau khi hoàn tất (cần chứng từ)'}
+                </span>
               </label>
             )}
           </div>
 
-          {/* Drive Uploader when attaching proof */}
           <DriveUploader
             txCode={previewCode}
             isoDate={actualDate || expectedDate || todayIso}
@@ -612,7 +758,6 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
             onRemoveAttachment={() => {}}
           />
 
-          {/* Footer Buttons */}
           <div className="pt-2 border-t border-slate-100 flex items-center justify-end gap-2.5">
             <button
               type="button"
@@ -627,6 +772,8 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
               className={`inline-flex items-center gap-2 px-5 py-2 text-sm font-bold text-white rounded-xl shadow-md transition-all whitespace-nowrap disabled:opacity-50 ${
                 isIncome
                   ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20'
+                  : isTransfer
+                  ? 'bg-blue-600 hover:bg-blue-700 shadow-blue-600/20'
                   : 'bg-rose-600 hover:bg-rose-700 shadow-rose-600/20'
               }`}
             >

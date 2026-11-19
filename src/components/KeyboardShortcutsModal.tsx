@@ -23,7 +23,7 @@ export const KeyboardShortcutsModal: React.FC<KeyboardShortcutsModalProps> = ({
         aria-modal="true"
         aria-labelledby="shortcuts-modal-title"
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-xl bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden"
+        className="w-full max-w-2xl bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden"
       >
         <div className="px-6 py-4 bg-gradient-to-r from-[#0B1437] via-[#132154] to-[#1E3A8A] text-white flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">

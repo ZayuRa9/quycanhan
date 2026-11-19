@@ -6,7 +6,7 @@ import {
   SHORTCUT_GROUPS,
 } from './keyboardShortcuts';
 
-test('resolveKeyboardShortcut maps 1, 2, 3, N, and ? when idle and not in an editable input', () => {
+test('resolveKeyboardShortcut maps 1-8, Ctrl/Cmd+K, N, and ? when idle and not in an editable input', () => {
   const base = {
     ctrlKey: false,
     metaKey: false,
@@ -17,17 +17,20 @@ test('resolveKeyboardShortcut maps 1, 2, 3, N, and ? when idle and not in an edi
     modalState: 'none' as const,
   };
 
-  assert.deepEqual(resolveKeyboardShortcut({ ...base, key: '1' }), {
-    type: 'navigate',
-    page: 'overview',
+  assert.deepEqual(resolveKeyboardShortcut({ ...base, key: '1' }), { type: 'navigate', page: 'overview' });
+  assert.deepEqual(resolveKeyboardShortcut({ ...base, key: '2' }), { type: 'navigate', page: 'transactions' });
+  assert.deepEqual(resolveKeyboardShortcut({ ...base, key: '3' }), { type: 'navigate', page: 'accounts' });
+  assert.deepEqual(resolveKeyboardShortcut({ ...base, key: '4' }), { type: 'navigate', page: 'budgets' });
+  assert.deepEqual(resolveKeyboardShortcut({ ...base, key: '5' }), { type: 'navigate', page: 'savings' });
+  assert.deepEqual(resolveKeyboardShortcut({ ...base, key: '6' }), { type: 'navigate', page: 'reports' });
+  assert.deepEqual(resolveKeyboardShortcut({ ...base, key: '7' }), { type: 'navigate', page: 'archive' });
+  assert.deepEqual(resolveKeyboardShortcut({ ...base, key: '8' }), { type: 'navigate', page: 'settings' });
+
+  assert.deepEqual(resolveKeyboardShortcut({ ...base, key: 'k', ctrlKey: true }), {
+    type: 'focus_global_search',
   });
-  assert.deepEqual(resolveKeyboardShortcut({ ...base, key: '2' }), {
-    type: 'navigate',
-    page: 'transactions',
-  });
-  assert.deepEqual(resolveKeyboardShortcut({ ...base, key: '3' }), {
-    type: 'navigate',
-    page: 'archive',
+  assert.deepEqual(resolveKeyboardShortcut({ ...base, key: 'K', metaKey: true }), {
+    type: 'focus_global_search',
   });
   assert.deepEqual(resolveKeyboardShortcut({ ...base, key: 'n' }), {
     type: 'open_quick_transaction',
@@ -50,7 +53,7 @@ test('resolveKeyboardShortcut maps 1, 2, 3, N, and ? when idle and not in an edi
   );
 });
 
-test('resolveKeyboardShortcut never hijacks typing in inputs or browser Ctrl/Cmd shortcuts', () => {
+test('resolveKeyboardShortcut never hijacks typing in inputs or unrelated Ctrl/Cmd shortcuts', () => {
   const base = {
     ctrlKey: false,
     metaKey: false,
@@ -65,6 +68,12 @@ test('resolveKeyboardShortcut never hijacks typing in inputs or browser Ctrl/Cmd
   assert.equal(resolveKeyboardShortcut({ ...base, key: '1', isEditable: true }), null);
   assert.equal(resolveKeyboardShortcut({ ...base, key: 'n', isEditable: true }), null);
   assert.equal(resolveKeyboardShortcut({ ...base, key: '?', isEditable: true }), null);
+
+  // Ctrl+K is ignored while a modal is open
+  assert.equal(
+    resolveKeyboardShortcut({ ...base, key: 'k', ctrlKey: true, modalState: 'quick_transaction' }),
+    null
+  );
 
   // Browser Ctrl / Cmd combos
   assert.equal(resolveKeyboardShortcut({ ...base, key: '1', ctrlKey: true }), null);
@@ -112,6 +121,19 @@ test('resolveKeyboardShortcut handles modal layers, Escape, and Ctrl/Cmd+Enter s
       modalState: 'shortcuts_help',
     }),
     { type: 'close_modal' }
+  );
+  assert.deepEqual(
+    resolveKeyboardShortcut({
+      ...base,
+      key: 'Escape',
+      isEditable: true,
+      modalState: 'expense_categories',
+    }),
+    { type: 'close_modal' }
+  );
+  assert.equal(
+    resolveKeyboardShortcut({ ...base, key: '1', modalState: 'expense_categories' }),
+    null
   );
   assert.equal(
     resolveKeyboardShortcut({ ...base, key: 'Escape', modalState: 'none' }),

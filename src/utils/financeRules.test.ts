@@ -13,19 +13,31 @@ import {
   computeExpenseForecast,
   computeFinancialSummary,
   computeMonthlySeries,
+  computePlannedVsActualReport,
+  computeSavingsSummary,
   computeTransactionReminders,
+  computeTransferDestinationDelta,
   evaluateBudget,
+  evaluateSavingsGoal,
+  filterTransactionsByQuery,
   formatDateVN,
   formatVND,
   getDriveFolderParts,
   mergeExpenseCategories,
+  moveExpenseCategory,
   normalizeTransactionStatus,
+  paginateItems,
   removeExpenseCategory,
+  reorderExpenseCategories,
+  searchGlobalEntities,
   sortTransactions,
+  toVndInt,
   validateTransactionStatusChange,
+  detectDuplicateTransactions,
 } from './financeRules';
+import { buildPdfDocumentFromJpegPages } from './pdfExport';
 import { parseSingleSheetRows, TEMPLATE_HEADERS } from './excelTemplate';
-import type { BudgetLimit, DriveAttachment, FinancialAccount, Transaction } from '../types/finance';
+import type { BudgetLimit, DriveAttachment, FinancialAccount, SavingsGoal, Transaction } from '../types/finance';
 
 const sampleAttachment: DriveAttachment = {
   id: 'drv-1',
@@ -725,6 +737,51 @@ test('addExpenseCategory, removeExpenseCategory, and mergeExpenseCategories enfo
   assert.deepEqual(merged, ['Ăn uống', 'Y tế']);
 });
 
+test('reorderExpenseCategories and moveExpenseCategory reorder without mutating input and handle bounds', () => {
+  const source = ['Ăn uống', 'Đi lại', 'Mua sắm', 'Khác'];
+  const snapshot = [...source];
+
+  // Drag/move from index 2 to 0
+  assert.deepEqual(reorderExpenseCategories(source, 2, 0), [
+    'Mua sắm',
+    'Ăn uống',
+    'Đi lại',
+    'Khác',
+  ]);
+
+  // Move from index 0 to 3
+  assert.deepEqual(reorderExpenseCategories(source, 0, 3), [
+    'Đi lại',
+    'Mua sắm',
+    'Khác',
+    'Ăn uống',
+  ]);
+
+  // Out-of-bounds or same index returns unchanged copy
+  assert.deepEqual(reorderExpenseCategories(source, -1, 2), source);
+  assert.deepEqual(reorderExpenseCategories(source, 0, 99), source);
+  assert.deepEqual(reorderExpenseCategories(source, 1, 1), source);
+
+  // moveExpenseCategory up/down
+  assert.deepEqual(moveExpenseCategory(source, 1, 'up'), [
+    'Đi lại',
+    'Ăn uống',
+    'Mua sắm',
+    'Khác',
+  ]);
+  assert.deepEqual(moveExpenseCategory(source, 1, 'down'), [
+    'Ăn uống',
+    'Mua sắm',
+    'Đi lại',
+    'Khác',
+  ]);
+  assert.deepEqual(moveExpenseCategory(source, 0, 'up'), source);
+  assert.deepEqual(moveExpenseCategory(source, 3, 'down'), source);
+
+  // Input array was never mutated
+  assert.deepEqual(source, snapshot);
+});
+
 test('computeBalanceForecast combines historical balances with scheduled upcoming transactions and detects negative risk', () => {
   const empty = computeBalanceForecast([], [], { todayIso: '2026-11-19' });
   assert.equal(empty.currentBalance, 0);
@@ -922,5 +979,379 @@ test('computeBalanceForecast combines historical balances with scheduled upcomin
   assert.equal(noHistory.forecast.length, 1);
   assert.equal(noHistory.forecast[0].balance, 13000000);
 });
+
+test('filterTransactionsByQuery filters in real-time by name, counterparty, or note content', () => {
+  const base: Omit<
+    Transaction,
+    'id' | 'code' | 'name' | 'counterparty' | 'description' | 'reason'
+  > = {
+    userId: 'u1',
+    kind: 'expense',
+    amount: 100000,
+    category: 'Ăn uống',
+    method: 'Tiền mặt',
+    accountId: 'a1',
+    accountName: 'Ví',
+    expectedDate: '2026-11-19',
+    status: 'Dự kiến',
+    isArchived: false,
+    attachments: [],
+    auditHistory: [],
+  };
+
+  const list: Transaction[] = [
+    {
+      ...base,
+      id: '1',
+      code: 'KC-2026.11-01',
+      name: 'Thanh toán tiền điện T11',
+      counterparty: 'Công ty Điện lực EVN',
+      description: 'Hóa đơn phòng trọ tầng 2',
+    },
+    {
+      ...base,
+      id: '2',
+      code: 'KC-2026.11-02',
+      name: 'Mua sách chuyên ngành',
+      counterparty: 'Nhà sách Phương Nam',
+      description: 'Tài liệu nghiên cứu AI',
+    },
+    {
+      ...base,
+      id: '3',
+      code: 'KC-2026.11-03',
+      name: 'Ăn trưa văn phòng',
+      counterparty: 'Quán Cơm Tấm Sài Gòn',
+      reason: 'Tiếp khách đối tác',
+    },
+  ];
+
+  // Empty/whitespace returns all
+  assert.equal(filterTransactionsByQuery(list, '').length, 3);
+  assert.equal(filterTransactionsByQuery(list, '   ').length, 3);
+
+  // Match by name (case-insensitive & ASCII accent-insensitive)
+  assert.deepEqual(
+    filterTransactionsByQuery(list, 'tiền điện').map((t) => t.id),
+    ['1']
+  );
+  assert.deepEqual(
+    filterTransactionsByQuery(list, 'tien dien').map((t) => t.id),
+    ['1']
+  );
+
+  // Match by counterparty
+  assert.deepEqual(
+    filterTransactionsByQuery(list, 'Phương Nam').map((t) => t.id),
+    ['2']
+  );
+
+  // Match by note / description / reason
+  assert.deepEqual(
+    filterTransactionsByQuery(list, 'phòng trọ').map((t) => t.id),
+    ['1']
+  );
+  assert.deepEqual(
+    filterTransactionsByQuery(list, 'nghiên cứu').map((t) => t.id),
+    ['2']
+  );
+  assert.deepEqual(
+    filterTransactionsByQuery(list, 'đối tác').map((t) => t.id),
+    ['3']
+  );
+
+  // Multi-word across name + counterparty
+  assert.deepEqual(
+    filterTransactionsByQuery(list, 'điện EVN').map((t) => t.id),
+    ['1']
+  );
+
+  // Non-matching query returns empty
+  assert.equal(filterTransactionsByQuery(list, 'không tồn tại').length, 0);
+});
+
+test('internal transfers (CK) never count as income, expense, budget spend, or aggregate net delta', () => {
+  assert.equal(buildTransactionCode('transfer', '2026.11', 1), 'CK-2026.11-01');
+  assert.equal(toVndInt(1250000.6), 1250001);
+
+  assert.equal(
+    validateTransactionStatusChange('transfer', 'Đã thực hiện', '2026-11-19', [], 'a1', false, 'a1').valid,
+    false
+  );
+  assert.equal(
+    validateTransactionStatusChange('transfer', 'Đã thực hiện', '', [], 'a1', false, 'a2').valid,
+    false
+  );
+  assert.equal(
+    validateTransactionStatusChange('transfer', 'Đã thực hiện', '2026-11-19', [], 'a1', false, 'a2').valid,
+    true
+  );
+
+  assert.equal(computeTransferDestinationDelta(false, true, 5000000, 5000000), 5000000);
+  assert.equal(computeTransferDestinationDelta(true, false, 5000000, 5000000), -5000000);
+
+  const accounts: FinancialAccount[] = [
+    { id: 'a1', userId: 'u1', type: 'bank', name: 'VCB', initialBalance: 20000000, currentBalance: 15000000 },
+    { id: 'a2', userId: 'u1', type: 'savings', name: 'Tiết kiệm', initialBalance: 0, currentBalance: 5000000 },
+  ];
+
+  const txs: Transaction[] = [
+    {
+      id: 't1',
+      userId: 'u1',
+      code: 'CK-2026.11-01',
+      kind: 'transfer',
+      name: 'Chuyển quỹ tiết kiệm',
+      amount: 5000000,
+      category: 'Gửi tiết kiệm',
+      method: 'Chuyển khoản ngân hàng',
+      accountId: 'a1',
+      accountName: 'VCB',
+      toAccountId: 'a2',
+      toAccountName: 'Tiết kiệm',
+      expectedDate: '2026-11-10',
+      actualDate: '2026-11-10',
+      status: 'Đã thực hiện',
+      isArchived: true,
+      attachments: [],
+      auditHistory: [],
+    },
+  ];
+
+  const summary = computeFinancialSummary(accounts, txs);
+  assert.equal(summary.totalAvailableBalance, 20000000);
+  assert.equal(summary.totalCollectedIncome, 0);
+  assert.equal(summary.totalPaidExpense, 0);
+  assert.equal(summary.netRealizedCashflow, 0);
+  assert.equal(summary.totalTransferVolume, 5000000);
+
+  const alloc = computeAccountAllocation(accounts);
+  assert.equal(alloc.byType.savings.count, 1);
+  assert.equal(alloc.byType.savings.total, 5000000);
+
+  const archiveSum = computeArchiveSummary(txs);
+  assert.equal(archiveSum.archivedTransferCount, 1);
+  assert.equal(archiveSum.archivedTransferTotal, 5000000);
+
+  const monthly = computeMonthlySeries(txs, 2026);
+  assert.equal(monthly[10].income, 0);
+  assert.equal(monthly[10].expense, 0);
+  assert.equal(computeBalanceTimeline(accounts, txs).length, 0);
+});
+
+test('computePlannedVsActualReport computes accurate variance and excludes cancelled and transfers', () => {
+  const base = {
+    userId: 'u1',
+    method: 'Chuyển khoản ngân hàng',
+    accountId: 'a1',
+    accountName: 'VCB',
+    isArchived: false,
+    attachments: [],
+    auditHistory: [],
+  };
+  const txs: Transaction[] = [
+    {
+      ...base,
+      id: '1',
+      code: 'KT-2026.11-01',
+      kind: 'income',
+      name: 'Lương T11',
+      category: 'Tiền lương',
+      amount: 20000000,
+      actualAmount: 21000000,
+      expectedDate: '2026-11-05',
+      actualDate: '2026-11-05',
+      status: 'Đã thực hiện',
+    },
+    {
+      ...base,
+      id: '2',
+      code: 'KC-2026.11-01',
+      kind: 'expense',
+      name: 'Tiền nhà T11',
+      category: 'Sinh hoạt cá nhân',
+      amount: 5000000,
+      actualAmount: 5000000,
+      expectedDate: '2026-11-06',
+      actualDate: '2026-11-06',
+      status: 'Đã thực hiện',
+    },
+    {
+      ...base,
+      id: '3',
+      code: 'KC-2026.11-02',
+      kind: 'expense',
+      name: 'Mua sắm dự kiến',
+      category: 'Mua sắm',
+      amount: 2000000,
+      expectedDate: '2026-11-28',
+      status: 'Dự kiến',
+    },
+    {
+      ...base,
+      id: '4',
+      code: 'KC-2026.11-03',
+      kind: 'expense',
+      name: 'Đã hủy',
+      category: 'Mua sắm',
+      amount: 9000000,
+      expectedDate: '2026-11-28',
+      status: 'Đã hủy',
+    },
+    {
+      ...base,
+      id: '5',
+      code: 'CK-2026.11-01',
+      kind: 'transfer',
+      name: 'Chuyển nội bộ',
+      category: 'Chuyển khoản nội bộ',
+      toAccountId: 'a2',
+      toAccountName: 'Ví',
+      amount: 4000000,
+      expectedDate: '2026-11-12',
+      actualDate: '2026-11-12',
+      status: 'Đã thực hiện',
+    },
+  ];
+
+  const report = computePlannedVsActualReport(txs, { year: 2026, month: '11' });
+  assert.equal(report.plannedIncome, 20000000);
+  assert.equal(report.actualIncome, 21000000);
+  assert.equal(report.incomeVariance, 1000000);
+  assert.equal(report.plannedExpense, 7000000);
+  assert.equal(report.actualExpense, 5000000);
+  assert.equal(report.expenseVariance, -2000000);
+  assert.equal(report.plannedNet, 13000000);
+  assert.equal(report.actualNet, 16000000);
+  assert.equal(report.categories.length, 3);
+});
+
+test('evaluateSavingsGoal and computeSavingsSummary calculate progress and monthly pace', () => {
+  const goals: SavingsGoal[] = [
+    {
+      id: 'g1',
+      userId: 'u1',
+      name: 'Quỹ dự phòng',
+      targetAmount: 60000000,
+      currentAmount: 30000000,
+      targetDate: '2027-05-19', // ~181 days after 2026-11-19 (~6 months)
+      status: 'active',
+    },
+    {
+      id: 'g2',
+      userId: 'u1',
+      name: 'Mua Laptop',
+      targetAmount: 25000000,
+      currentAmount: 25000000,
+      status: 'completed',
+    },
+  ];
+
+  const ev1 = evaluateSavingsGoal(goals[0], '2026-11-19');
+  assert.equal(ev1.percent, 50);
+  assert.equal(ev1.remainingAmount, 30000000);
+  assert.equal(ev1.isCompleted, false);
+  assert.equal(ev1.isOverdue, false);
+  assert.ok((ev1.monthlyPaceNeeded || 0) > 4500000 && (ev1.monthlyPaceNeeded || 0) < 5500000);
+
+  const summary = computeSavingsSummary(goals);
+  assert.equal(summary.totalTarget, 85000000);
+  assert.equal(summary.totalAccumulated, 55000000);
+  assert.equal(summary.activeCount, 1);
+  assert.equal(summary.completedCount, 1);
+});
+
+test('detectDuplicateTransactions flags matching existing transactions and in-file duplicates', () => {
+  const existing: Transaction[] = [
+    {
+      id: 'e1',
+      userId: 'u1',
+      code: 'KC-2026.11-01',
+      kind: 'expense',
+      name: 'Tiền điện T11',
+      amount: 850000,
+      category: 'Sinh hoạt cá nhân',
+      method: 'Chuyển khoản ngân hàng',
+      accountId: 'a1',
+      accountName: 'VCB',
+      expectedDate: '2026-11-15',
+      status: 'Đã thực hiện',
+      isArchived: false,
+      attachments: [],
+      auditHistory: [],
+    },
+  ];
+
+  const dupResult = detectDuplicateTransactions(
+    [
+      { rowNumber: 6, kind: 'expense', name: 'tien dien T11', amount: 850000, expectedDate: '2026-11-15' },
+      { rowNumber: 7, kind: 'income', name: 'Thưởng dự án', amount: 3000000, expectedDate: '2026-11-20' },
+      { rowNumber: 8, kind: 'income', name: 'Thưởng dự án', amount: 3000000, expectedDate: '2026-11-20' },
+    ],
+    existing
+  );
+
+  assert.equal(dupResult.duplicateRowNumbers.has(6), true);
+  assert.equal(dupResult.duplicateRowNumbers.has(7), false);
+  assert.equal(dupResult.duplicateRowNumbers.has(8), true);
+  assert.ok(dupResult.reasonByRow.get(6)?.includes('KC-2026.11-01'));
+  assert.ok(dupResult.reasonByRow.get(8)?.includes('dòng 7'));
+});
+
+test('paginateItems, extended sortTransactions, searchGlobalEntities, and Excel transfer/savings parsing work cleanly', () => {
+  const page2 = paginateItems([1, 2, 3, 4, 5], 2, 2);
+  assert.deepEqual(page2.items, [3, 4]);
+  assert.equal(page2.totalPages, 3);
+  assert.equal(page2.startIndex, 2);
+  assert.equal(page2.endIndex, 4);
+
+  const clampedPage = paginateItems([1, 2, 3], 99, 2);
+  assert.equal(clampedPage.page, 2);
+  assert.deepEqual(clampedPage.items, [3]);
+
+  const txA: Transaction = {
+    id: '1', userId: 'u1', code: 'KT-2026.11-01', kind: 'income', name: 'Bán sách', amount: 100000,
+    category: 'Tiền bán hàng', method: 'Tiền mặt', accountId: 'a1', accountName: 'Ví',
+    expectedDate: '2026-11-10', status: 'Dự kiến', isArchived: false, attachments: [], auditHistory: [],
+  };
+  const txB: Transaction = {
+    ...txA, id: '2', code: 'KC-2026.11-02', kind: 'expense', name: 'Ăn sáng',
+  };
+  assert.deepEqual(sortTransactions([txA, txB], 'name', 'asc').map((t) => t.id), ['2', '1']);
+  assert.deepEqual(sortTransactions([txA, txB], 'code', 'desc').map((t) => t.id), ['1', '2']);
+
+  const searchRes = searchGlobalEntities({
+    query: 'quỹ dự phòng',
+    transactions: [txA, txB],
+    accounts: [],
+    budgets: [],
+    savingsGoals: [{ id: 'g1', userId: 'u1', name: 'Quỹ dự phòng', targetAmount: 10000000, currentAmount: 2000000, status: 'active' }],
+  });
+  assert.equal(searchRes.length, 1);
+  assert.equal(searchRes[0].targetPage, 'savings');
+
+  const parsed = parseSingleSheetRows([
+    [...TEMPLATE_HEADERS],
+    ['Tài khoản', 'Sổ Tiết Kiệm BIDV', 'Tài khoản tiết kiệm', '50000000', '50000000', 'BIDV', '999', '', '', '', '', '', '', ''],
+    ['Chuyển khoản', 'Nạp quỹ tiết kiệm', 'Gửi tiết kiệm', '5000000', '', 'Chuyển khoản ngân hàng', 'VCB', 'Sổ Tiết Kiệm BIDV', '19/11/2026', '19/11/2026', 'Đã thực hiện', '', '', ''],
+  ]);
+  assert.equal(parsed.errors.length, 0);
+  assert.equal(parsed.accounts[0].type, 'savings');
+  assert.equal(parsed.transfers.length, 1);
+  assert.equal(parsed.transfers[0].toAccountName, 'Sổ Tiết Kiệm BIDV');
+});
+
+test('buildPdfDocumentFromJpegPages outputs valid multi-page PDF 1.4 binary', () => {
+  const fakeJpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0xff, 0xd9]);
+  const pdf = buildPdfDocumentFromJpegPages([
+    { data: fakeJpeg, width: 1240, height: 1754 },
+    { data: fakeJpeg, width: 1240, height: 1754 },
+  ]);
+  const text = new TextDecoder().decode(pdf);
+  assert.ok(text.startsWith('%PDF-1.4'));
+  assert.ok(text.includes('/Count 2'));
+  assert.ok(text.includes('%%EOF'));
+});
+
 
 

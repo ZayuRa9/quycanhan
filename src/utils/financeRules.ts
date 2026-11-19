@@ -1,15 +1,22 @@
 import type {
+  AccountType,
   BudgetLimit,
   CanonicalTransactionStatus,
   DriveAttachment,
   FinancialAccount,
+  SavingsGoal,
   Transaction,
   TransactionKind,
   TransactionStatus,
 } from '../types/finance';
 
+export function toVndInt(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.round(value);
+}
+
 export function formatVND(amount: number): string {
-  const safe = Number.isFinite(amount) ? Math.round(amount) : 0;
+  const safe = toVndInt(amount);
   return `${new Intl.NumberFormat('vi-VN').format(safe)} ₫`;
 }
 
@@ -51,12 +58,18 @@ export function getDriveFolderParts(isoDate: string): {
   };
 }
 
+export function getTransactionCodePrefix(kind: TransactionKind): 'KT' | 'KC' | 'CK' {
+  if (kind === 'income') return 'KT';
+  if (kind === 'transfer') return 'CK';
+  return 'KC';
+}
+
 export function buildTransactionCode(
   kind: TransactionKind,
   yearMonthDot: string,
   sequenceNumber: number
 ): string {
-  const prefix = kind === 'income' ? 'KT' : 'KC';
+  const prefix = getTransactionCodePrefix(kind);
   const seqStr = String(Math.max(1, Math.floor(sequenceNumber))).padStart(2, '0');
   return `${prefix}-${yearMonthDot}-${seqStr}`;
 }
@@ -136,14 +149,22 @@ export function isExpenseRealized(status: TransactionStatus | string): boolean {
   );
 }
 
+export function isTransferRealized(status: TransactionStatus | string): boolean {
+  return (
+    status === 'Đã thực hiện' ||
+    status === 'Đã đối soát' ||
+    status === 'Đã hoàn thành'
+  );
+}
+
 export function isTransactionRealized(
   kind: TransactionKind,
   status: TransactionStatus | string
 ): boolean {
   if (isTransactionCancelled(status)) return false;
-  return kind === 'income'
-    ? isIncomeRealized(status)
-    : isExpenseRealized(status);
+  if (kind === 'income') return isIncomeRealized(status);
+  if (kind === 'transfer') return isTransferRealized(status);
+  return isExpenseRealized(status);
 }
 
 export function getEffectiveTransactionAmount(
@@ -154,9 +175,9 @@ export function getEffectiveTransactionAmount(
     Number.isFinite(tx.actualAmount) &&
     tx.actualAmount > 0
   ) {
-    return tx.actualAmount;
+    return toVndInt(tx.actualAmount);
   }
-  return Number.isFinite(tx.amount) ? tx.amount : 0;
+  return toVndInt(tx.amount);
 }
 
 export function getTransactionEffectiveDate(
@@ -173,6 +194,7 @@ export interface FinancialSummary {
   pendingIncome: number;
   pendingExpense: number;
   netRealizedCashflow: number;
+  totalTransferVolume: number;
 }
 
 export function computeFinancialSummary(
@@ -180,8 +202,7 @@ export function computeFinancialSummary(
   transactions: Transaction[]
 ): FinancialSummary {
   const totalAvailableBalance = accounts.reduce(
-    (sum, acc) =>
-      sum + (Number.isFinite(acc.currentBalance) ? acc.currentBalance : 0),
+    (sum, acc) => sum + toVndInt(acc.currentBalance),
     0
   );
 
@@ -189,21 +210,29 @@ export function computeFinancialSummary(
   let totalPaidExpense = 0;
   let pendingIncome = 0;
   let pendingExpense = 0;
+  let totalTransferVolume = 0;
 
   for (const tx of transactions) {
     if (isTransactionCancelled(tx.status)) continue;
     const val = getEffectiveTransactionAmount(tx);
+    // Internal transfers must NEVER be counted as income or expense
+    if (tx.kind === 'transfer') {
+      if (isTransferRealized(tx.status)) {
+        totalTransferVolume += val;
+      }
+      continue;
+    }
     if (tx.kind === 'income') {
       if (isIncomeRealized(tx.status)) {
         totalCollectedIncome += val;
       } else {
-        pendingIncome += tx.amount;
+        pendingIncome += toVndInt(tx.amount);
       }
     } else {
       if (isExpenseRealized(tx.status)) {
         totalPaidExpense += val;
       } else {
-        pendingExpense += tx.amount;
+        pendingExpense += toVndInt(tx.amount);
       }
     }
   }
@@ -216,6 +245,7 @@ export function computeFinancialSummary(
     pendingIncome,
     pendingExpense,
     netRealizedCashflow: totalCollectedIncome - totalPaidExpense,
+    totalTransferVolume,
   };
 }
 
@@ -227,8 +257,19 @@ export function computeAccountBalanceDelta(
   nextEffectiveAmount: number
 ): number {
   const sign = kind === 'income' ? 1 : -1;
-  const prevImpact = wasRealized ? sign * prevEffectiveAmount : 0;
-  const nextImpact = isNowRealized ? sign * nextEffectiveAmount : 0;
+  const prevImpact = wasRealized ? sign * toVndInt(prevEffectiveAmount) : 0;
+  const nextImpact = isNowRealized ? sign * toVndInt(nextEffectiveAmount) : 0;
+  return nextImpact - prevImpact;
+}
+
+export function computeTransferDestinationDelta(
+  wasRealized: boolean,
+  isNowRealized: boolean,
+  prevEffectiveAmount: number,
+  nextEffectiveAmount: number
+): number {
+  const prevImpact = wasRealized ? toVndInt(prevEffectiveAmount) : 0;
+  const nextImpact = isNowRealized ? toVndInt(nextEffectiveAmount) : 0;
   return nextImpact - prevImpact;
 }
 
@@ -243,11 +284,42 @@ export function validateTransactionStatusChange(
   actualDate: string | undefined,
   attachments: DriveAttachment[],
   accountId: string | undefined,
-  markArchived: boolean
+  markArchived: boolean,
+  toAccountId?: string
 ): ValidationResult {
   if (isTransactionCancelled(nextStatus)) {
     return { valid: true };
   }
+  if (kind === 'transfer') {
+    if (!accountId) {
+      return {
+        valid: false,
+        error: 'Vui lòng chọn tài khoản nguồn chuyển đi.',
+      };
+    }
+    if (!toAccountId) {
+      return {
+        valid: false,
+        error: 'Vui lòng chọn tài khoản đích nhận chuyển khoản nội bộ.',
+      };
+    }
+    if (accountId === toAccountId) {
+      return {
+        valid: false,
+        error: 'Tài khoản nguồn và tài khoản đích không được trùng nhau.',
+      };
+    }
+    if (isTransferRealized(nextStatus) || markArchived) {
+      if (!actualDate || !actualDate.trim()) {
+        return {
+          valid: false,
+          error: 'Vui lòng nhập ngày thực tế chuyển khoản.',
+        };
+      }
+    }
+    return { valid: true };
+  }
+
   if (kind === 'income') {
     if (isIncomeRealized(nextStatus) || markArchived) {
       if (!accountId) {
@@ -346,9 +418,9 @@ export function evaluateBudget(
     }
   }
 
-  const limit = budget.limitAmount > 0 ? budget.limitAmount : 1;
+  const limit = budget.limitAmount > 0 ? toVndInt(budget.limitAmount) : 1;
   const percent = (spent / limit) * 100;
-  const remaining = budget.limitAmount - spent;
+  const remaining = toVndInt(budget.limitAmount) - spent;
 
   let alertLevel: BudgetAlertLevel = 'ok';
   if (percent >= 100) {
@@ -414,6 +486,8 @@ export function computeTransactionReminders(
         message:
           tx.kind === 'income'
             ? `Khoản thu quá hạn ${overdueDays} ngày (dự kiến ${formatDateVN(tx.expectedDate)})`
+            : tx.kind === 'transfer'
+            ? `Lệnh chuyển khoản quá hạn ${overdueDays} ngày (dự kiến ${formatDateVN(tx.expectedDate)})`
             : `Khoản chi quá hạn ${overdueDays} ngày (hạn ${formatDateVN(tx.expectedDate)})`,
       });
     } else if (daysDiff === 0) {
@@ -424,6 +498,8 @@ export function computeTransactionReminders(
         message:
           tx.kind === 'income'
             ? `Hôm nay đến ngày dự kiến nhận tiền (${formatDateVN(tx.expectedDate)})`
+            : tx.kind === 'transfer'
+            ? `Hôm nay đến lịch chuyển khoản nội bộ (${formatDateVN(tx.expectedDate)})`
             : `Hôm nay đến hạn thanh toán (${formatDateVN(tx.expectedDate)})`,
       });
     } else if (daysDiff <= leadDays) {
@@ -434,6 +510,8 @@ export function computeTransactionReminders(
         message:
           tx.kind === 'income'
             ? `Còn ${daysDiff} ngày tới hạn dự kiến nhận (${formatDateVN(tx.expectedDate)})`
+            : tx.kind === 'transfer'
+            ? `Còn ${daysDiff} ngày tới lịch chuyển khoản (${formatDateVN(tx.expectedDate)})`
             : `Còn ${daysDiff} ngày tới hạn thanh toán (${formatDateVN(tx.expectedDate)})`,
       });
     }
@@ -474,6 +552,7 @@ export function computeMonthlySeries(
   }));
 
   for (const tx of transactions) {
+    if (tx.kind === 'transfer') continue;
     if (!isTransactionRealized(tx.kind, tx.status)) continue;
     const dateStr = getTransactionEffectiveDate(tx);
     const match = /^(\d{4})-(\d{2})/.exec(dateStr);
@@ -485,7 +564,7 @@ export function computeMonthlySeries(
     const val = getEffectiveTransactionAmount(tx);
     if (tx.kind === 'income') {
       buckets[txMonth - 1].income += val;
-    } else {
+    } else if (tx.kind === 'expense') {
       buckets[txMonth - 1].expense += val;
     }
   }
@@ -540,13 +619,13 @@ export function computeBalanceTimeline(
   transactions: Transaction[]
 ): BalancePoint[] {
   const initialTotal = accounts.reduce(
-    (sum, acc) =>
-      sum + (Number.isFinite(acc.initialBalance) ? acc.initialBalance : 0),
+    (sum, acc) => sum + toVndInt(acc.initialBalance),
     0
   );
 
+  // Internal transfers cancel out across aggregate user net balance
   const realized = transactions
-    .filter((tx) => isTransactionRealized(tx.kind, tx.status))
+    .filter((tx) => tx.kind !== 'transfer' && isTransactionRealized(tx.kind, tx.status))
     .map((tx) => ({
       date: getTransactionEffectiveDate(tx),
       delta:
@@ -581,7 +660,7 @@ export function computeBalanceTimeline(
   return points;
 }
 
-export type TransactionSortField = 'date' | 'amount' | 'status';
+export type TransactionSortField = 'date' | 'amount' | 'status' | 'code' | 'name';
 export type SortDirection = 'asc' | 'desc';
 
 export function sortTransactions(
@@ -607,6 +686,10 @@ export function sortTransactions(
       if (cmp === 0) {
         cmp = a.status.localeCompare(b.status, 'vi');
       }
+    } else if (field === 'code') {
+      cmp = a.code.localeCompare(b.code);
+    } else if (field === 'name') {
+      cmp = a.name.localeCompare(b.name, 'vi');
     }
 
     if (cmp !== 0) {
@@ -614,6 +697,38 @@ export function sortTransactions(
     }
     return b.code.localeCompare(a.code);
   });
+}
+
+export interface PaginatedResult<T> {
+  items: T[];
+  page: number;
+  pageSize: number;
+  totalItems: number;
+  totalPages: number;
+  startIndex: number;
+  endIndex: number;
+}
+
+export function paginateItems<T>(
+  items: readonly T[],
+  requestedPage: number,
+  requestedPageSize: number
+): PaginatedResult<T> {
+  const pageSize = Math.max(1, Math.floor(requestedPageSize || 10));
+  const totalItems = items.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  const page = Math.min(totalPages, Math.max(1, Math.floor(requestedPage || 1)));
+  const startIndex = totalItems === 0 ? 0 : (page - 1) * pageSize;
+  const endIndex = Math.min(totalItems, startIndex + pageSize);
+  return {
+    items: items.slice(startIndex, endIndex),
+    page,
+    pageSize,
+    totalItems,
+    totalPages,
+    startIndex,
+    endIndex,
+  };
 }
 
 export interface ExpenseForecastPoint {
@@ -776,18 +891,19 @@ export interface AccountAllocationSummary {
   totalBalance: number;
   positiveTotal: number;
   items: AccountAllocationItem[];
-  byType: Record<FinancialAccount['type'], { count: number; total: number; percentage: number }>;
+  byType: Record<AccountType, { count: number; total: number; percentage: number }>;
 }
 
 export function computeAccountAllocation(
   accounts: FinancialAccount[]
 ): AccountAllocationSummary {
   const totalBalance = accounts.reduce(
-    (sum, acc) => sum + (Number.isFinite(acc.currentBalance) ? acc.currentBalance : 0),
+    (sum, acc) => sum + toVndInt(acc.currentBalance),
     0
   );
   const positiveTotal = accounts.reduce(
-    (sum, acc) => sum + (Number.isFinite(acc.currentBalance) && acc.currentBalance > 0 ? acc.currentBalance : 0),
+    (sum, acc) =>
+      sum + (Number.isFinite(acc.currentBalance) && acc.currentBalance > 0 ? toVndInt(acc.currentBalance) : 0),
     0
   );
 
@@ -795,15 +911,17 @@ export function computeAccountAllocation(
     cash: { count: 0, total: 0, percentage: 0 },
     bank: { count: 0, total: 0, percentage: 0 },
     ewallet: { count: 0, total: 0, percentage: 0 },
+    savings: { count: 0, total: 0, percentage: 0 },
   };
 
   for (const acc of accounts) {
-    const bal = Number.isFinite(acc.currentBalance) ? acc.currentBalance : 0;
-    byType[acc.type].count += 1;
-    byType[acc.type].total += bal;
+    const bal = toVndInt(acc.currentBalance);
+    const bucket = byType[acc.type] || byType.bank;
+    bucket.count += 1;
+    bucket.total += bal;
   }
 
-  for (const key of ['cash', 'bank', 'ewallet'] as const) {
+  for (const key of ['cash', 'bank', 'ewallet', 'savings'] as const) {
     byType[key].percentage =
       positiveTotal > 0 && byType[key].total > 0
         ? (byType[key].total / positiveTotal) * 100
@@ -811,7 +929,7 @@ export function computeAccountAllocation(
   }
 
   const items: AccountAllocationItem[] = accounts.map((account) => {
-    const bal = Number.isFinite(account.currentBalance) ? account.currentBalance : 0;
+    const bal = toVndInt(account.currentBalance);
     const percentage = positiveTotal > 0 && bal > 0 ? (bal / positiveTotal) * 100 : 0;
     return { account, percentage };
   });
@@ -824,6 +942,8 @@ export interface ArchiveSummary {
   archivedIncomeTotal: number;
   archivedExpenseCount: number;
   archivedExpenseTotal: number;
+  archivedTransferCount: number;
+  archivedTransferTotal: number;
   totalAttachments: number;
 }
 
@@ -832,6 +952,8 @@ export function computeArchiveSummary(transactions: Transaction[]): ArchiveSumma
   let archivedIncomeTotal = 0;
   let archivedExpenseCount = 0;
   let archivedExpenseTotal = 0;
+  let archivedTransferCount = 0;
+  let archivedTransferTotal = 0;
   let totalAttachments = 0;
 
   for (const tx of transactions) {
@@ -841,6 +963,9 @@ export function computeArchiveSummary(transactions: Transaction[]): ArchiveSumma
     if (tx.kind === 'income') {
       archivedIncomeCount += 1;
       archivedIncomeTotal += amt;
+    } else if (tx.kind === 'transfer') {
+      archivedTransferCount += 1;
+      archivedTransferTotal += amt;
     } else {
       archivedExpenseCount += 1;
       archivedExpenseTotal += amt;
@@ -852,6 +977,8 @@ export function computeArchiveSummary(transactions: Transaction[]): ArchiveSumma
     archivedIncomeTotal,
     archivedExpenseCount,
     archivedExpenseTotal,
+    archivedTransferCount,
+    archivedTransferTotal,
     totalAttachments,
   };
 }
@@ -886,6 +1013,38 @@ export function removeExpenseCategory(
     return { next: [...list] };
   }
   return { next: filtered };
+}
+
+export function reorderExpenseCategories(
+  list: readonly string[],
+  fromIndex: number,
+  toIndex: number
+): string[] {
+  if (
+    list.length <= 1 ||
+    !Number.isInteger(fromIndex) ||
+    !Number.isInteger(toIndex) ||
+    fromIndex < 0 ||
+    fromIndex >= list.length ||
+    toIndex < 0 ||
+    toIndex >= list.length ||
+    fromIndex === toIndex
+  ) {
+    return [...list];
+  }
+  const copy = [...list];
+  const [moved] = copy.splice(fromIndex, 1);
+  copy.splice(toIndex, 0, moved);
+  return copy;
+}
+
+export function moveExpenseCategory(
+  list: readonly string[],
+  index: number,
+  direction: 'up' | 'down'
+): string[] {
+  const targetIndex = direction === 'up' ? index - 1 : index + 1;
+  return reorderExpenseCategories(list, index, targetIndex);
 }
 
 export function mergeExpenseCategories(
@@ -953,7 +1112,7 @@ export function computeBalanceForecast(
   const historyLimit = Math.max(5, options?.historyLimit ?? 24);
 
   const currentBalance = accounts.reduce(
-    (sum, acc) => sum + (Number.isFinite(acc.currentBalance) ? acc.currentBalance : 0),
+    (sum, acc) => sum + toVndInt(acc.currentBalance),
     0
   );
 
@@ -983,6 +1142,7 @@ export function computeBalanceForecast(
   let scheduledCount = 0;
 
   for (const tx of transactions) {
+    if (tx.kind === 'transfer') continue;
     if (tx.isArchived) continue;
     if (isTransactionCancelled(tx.status)) continue;
     if (isTransactionRealized(tx.kind, tx.status)) continue;
@@ -1081,5 +1241,481 @@ export function computeBalanceForecast(
   };
 }
 
+export function normalizeSearchText(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D')
+    .toLowerCase();
+}
 
+export function matchesSearchTokens(
+  searchableParts: readonly (string | undefined)[],
+  rawQuery: string
+): boolean {
+  const trimmed = rawQuery.trim();
+  if (!trimmed) return true;
+  const tokens = trimmed.split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return true;
 
+  const combinedLower = searchableParts
+    .filter(Boolean)
+    .join('\n')
+    .toLowerCase();
+  const combinedNormalized = normalizeSearchText(combinedLower);
+
+  return tokens.every((token) => {
+    const tokenLower = token.toLowerCase();
+    const tokenNormalized = normalizeSearchText(token);
+    if (tokenLower !== tokenNormalized) {
+      return combinedLower.includes(tokenLower);
+    }
+    return combinedNormalized.includes(tokenNormalized);
+  });
+}
+
+export function filterTransactionsByQuery(
+  transactions: readonly Transaction[],
+  rawQuery: string
+): Transaction[] {
+  const trimmed = rawQuery.trim();
+  if (!trimmed) {
+    return [...transactions];
+  }
+
+  return transactions.filter((tx) =>
+    matchesSearchTokens(
+      [tx.code, tx.name, tx.counterparty, tx.description, tx.reason],
+      trimmed
+    )
+  );
+}
+
+// =========================================================================
+// Planned vs Actual Reports
+// =========================================================================
+
+export interface PlannedActualCategoryRow {
+  kind: 'income' | 'expense';
+  category: string;
+  planned: number;
+  actual: number;
+  variance: number;
+  achievementPct: number;
+}
+
+export interface PlannedActualMonthRow {
+  month: number;
+  label: string;
+  plannedIncome: number;
+  actualIncome: number;
+  plannedExpense: number;
+  actualExpense: number;
+}
+
+export interface PlannedVsActualReport {
+  plannedIncome: number;
+  actualIncome: number;
+  incomeVariance: number;
+  incomeRatePct: number;
+  plannedExpense: number;
+  actualExpense: number;
+  expenseVariance: number;
+  expenseRatePct: number;
+  plannedNet: number;
+  actualNet: number;
+  categories: PlannedActualCategoryRow[];
+  months: PlannedActualMonthRow[];
+}
+
+export function computePlannedVsActualReport(
+  transactions: readonly Transaction[],
+  options: { year: number; month?: string }
+): PlannedVsActualReport {
+  const { year, month = 'ALL' } = options;
+
+  let plannedIncome = 0;
+  let actualIncome = 0;
+  let plannedExpense = 0;
+  let actualExpense = 0;
+
+  const catMap = new Map<string, { kind: 'income' | 'expense'; category: string; planned: number; actual: number }>();
+  const months: PlannedActualMonthRow[] = Array.from({ length: 12 }, (_, idx) => ({
+    month: idx + 1,
+    label: `T${String(idx + 1).padStart(2, '0')}`,
+    plannedIncome: 0,
+    actualIncome: 0,
+    plannedExpense: 0,
+    actualExpense: 0,
+  }));
+
+  for (const tx of transactions) {
+    if (tx.kind === 'transfer') continue;
+    if (isTransactionCancelled(tx.status)) continue;
+
+    const realized = isTransactionRealized(tx.kind, tx.status);
+    const refDate = realized
+      ? tx.actualDate || tx.expectedDate || tx.startDate || ''
+      : tx.expectedDate || tx.actualDate || tx.startDate || '';
+    const match = /^(\d{4})-(\d{2})/.exec(refDate);
+    if (!match) continue;
+    const txYear = Number(match[1]);
+    const txMonthStr = match[2];
+    const txMonthNum = Number(txMonthStr);
+    if (txYear !== year) continue;
+
+    const plannedAmt = toVndInt(tx.amount);
+    const actualAmt = realized ? getEffectiveTransactionAmount(tx) : 0;
+
+    if (txMonthNum >= 1 && txMonthNum <= 12) {
+      if (tx.kind === 'income') {
+        months[txMonthNum - 1].plannedIncome += plannedAmt;
+        months[txMonthNum - 1].actualIncome += actualAmt;
+      } else {
+        months[txMonthNum - 1].plannedExpense += plannedAmt;
+        months[txMonthNum - 1].actualExpense += actualAmt;
+      }
+    }
+
+    if (month !== 'ALL' && txMonthStr !== month) continue;
+
+    if (tx.kind === 'income') {
+      plannedIncome += plannedAmt;
+      actualIncome += actualAmt;
+    } else {
+      plannedExpense += plannedAmt;
+      actualExpense += actualAmt;
+    }
+
+    const catKey = `${tx.kind}::${tx.category}`;
+    const existing = catMap.get(catKey) || {
+      kind: tx.kind,
+      category: tx.category,
+      planned: 0,
+      actual: 0,
+    };
+    existing.planned += plannedAmt;
+    existing.actual += actualAmt;
+    catMap.set(catKey, existing);
+  }
+
+  const categories: PlannedActualCategoryRow[] = Array.from(catMap.values())
+    .map((c) => ({
+      ...c,
+      variance: c.actual - c.planned,
+      achievementPct: c.planned > 0 ? (c.actual / c.planned) * 100 : c.actual > 0 ? 100 : 0,
+    }))
+    .sort((a, b) => Math.max(b.planned, b.actual) - Math.max(a.planned, a.actual));
+
+  return {
+    plannedIncome,
+    actualIncome,
+    incomeVariance: actualIncome - plannedIncome,
+    incomeRatePct: plannedIncome > 0 ? (actualIncome / plannedIncome) * 100 : 0,
+    plannedExpense,
+    actualExpense,
+    expenseVariance: actualExpense - plannedExpense,
+    expenseRatePct: plannedExpense > 0 ? (actualExpense / plannedExpense) * 100 : 0,
+    plannedNet: plannedIncome - plannedExpense,
+    actualNet: actualIncome - actualExpense,
+    categories,
+    months,
+  };
+}
+
+// =========================================================================
+// Savings Goal Evaluation
+// =========================================================================
+
+export interface SavingsGoalEvaluation {
+  goal: SavingsGoal;
+  percent: number;
+  remainingAmount: number;
+  isCompleted: boolean;
+  isOverdue: boolean;
+  daysRemaining: number | null;
+  monthlyPaceNeeded: number | null;
+}
+
+export function evaluateSavingsGoal(
+  goal: SavingsGoal,
+  todayIso: string = new Date().toISOString().slice(0, 10)
+): SavingsGoalEvaluation {
+  const target = Math.max(1, toVndInt(goal.targetAmount));
+  const current = Math.max(0, toVndInt(goal.currentAmount));
+  const percent = (current / target) * 100;
+  const remainingAmount = Math.max(0, target - current);
+  const isCompleted = goal.status === 'completed' || current >= target;
+
+  let daysRemaining: number | null = null;
+  let isOverdue = false;
+  let monthlyPaceNeeded: number | null = null;
+
+  if (goal.targetDate) {
+    const todayUtc = parseIsoDayUtc(todayIso);
+    const targetUtc = parseIsoDayUtc(goal.targetDate);
+    if (todayUtc !== null && targetUtc !== null) {
+      daysRemaining = Math.round((targetUtc - todayUtc) / 86400000);
+      isOverdue = !isCompleted && daysRemaining < 0;
+      if (!isCompleted && remainingAmount > 0 && daysRemaining > 0) {
+        const monthsLeft = Math.max(1, daysRemaining / 30);
+        monthlyPaceNeeded = toVndInt(remainingAmount / monthsLeft);
+      }
+    }
+  }
+
+  return {
+    goal,
+    percent,
+    remainingAmount,
+    isCompleted,
+    isOverdue,
+    daysRemaining,
+    monthlyPaceNeeded,
+  };
+}
+
+export interface SavingsSummary {
+  totalTarget: number;
+  totalAccumulated: number;
+  overallPercent: number;
+  activeCount: number;
+  completedCount: number;
+}
+
+export function computeSavingsSummary(goals: readonly SavingsGoal[]): SavingsSummary {
+  let totalTarget = 0;
+  let totalAccumulated = 0;
+  let activeCount = 0;
+  let completedCount = 0;
+
+  for (const g of goals) {
+    totalTarget += Math.max(0, toVndInt(g.targetAmount));
+    totalAccumulated += Math.max(0, toVndInt(g.currentAmount));
+    if (g.status === 'completed' || g.currentAmount >= g.targetAmount) {
+      completedCount += 1;
+    } else if (g.status === 'active') {
+      activeCount += 1;
+    }
+  }
+
+  const overallPercent = totalTarget > 0 ? (totalAccumulated / totalTarget) * 100 : 0;
+  return {
+    totalTarget,
+    totalAccumulated,
+    overallPercent,
+    activeCount,
+    completedCount,
+  };
+}
+
+// =========================================================================
+// Duplicate Transaction Detection (Excel Import & Backup Safeguards)
+// =========================================================================
+
+export interface DuplicateCandidateInput {
+  rowNumber: number;
+  kind: TransactionKind;
+  name: string;
+  amount: number;
+  actualAmount?: number;
+  expectedDate: string;
+  actualDate?: string;
+}
+
+export interface DuplicateDetectionResult {
+  duplicateRowNumbers: Set<number>;
+  reasonByRow: Map<number, string>;
+}
+
+function buildDuplicateSignature(params: {
+  kind: TransactionKind;
+  date: string;
+  amount: number;
+  name: string;
+}): string {
+  const normName = normalizeSearchText(params.name).replace(/\s+/g, ' ').trim();
+  const datePart = (params.date || '').slice(0, 10);
+  return `${params.kind}|${datePart}|${toVndInt(params.amount)}|${normName}`;
+}
+
+export function detectDuplicateTransactions(
+  candidates: readonly DuplicateCandidateInput[],
+  existingTransactions: readonly Transaction[]
+): DuplicateDetectionResult {
+  const existingSignatures = new Map<string, string>();
+  for (const tx of existingTransactions) {
+    const amt = getEffectiveTransactionAmount(tx);
+    const sigExpected = buildDuplicateSignature({
+      kind: tx.kind,
+      date: tx.expectedDate,
+      amount: tx.amount,
+      name: tx.name,
+    });
+    existingSignatures.set(sigExpected, tx.code);
+    if (tx.actualDate || tx.actualAmount) {
+      const sigActual = buildDuplicateSignature({
+        kind: tx.kind,
+        date: tx.actualDate || tx.expectedDate,
+        amount: amt,
+        name: tx.name,
+      });
+      existingSignatures.set(sigActual, tx.code);
+    }
+  }
+
+  const seenInBatch = new Map<string, number>();
+  const duplicateRowNumbers = new Set<number>();
+  const reasonByRow = new Map<number, string>();
+
+  for (const row of candidates) {
+    const effAmt =
+      typeof row.actualAmount === 'number' && Number.isFinite(row.actualAmount) && row.actualAmount > 0
+        ? row.actualAmount
+        : row.amount;
+    const sig1 = buildDuplicateSignature({
+      kind: row.kind,
+      date: row.expectedDate,
+      amount: row.amount,
+      name: row.name,
+    });
+    const sig2 = buildDuplicateSignature({
+      kind: row.kind,
+      date: row.actualDate || row.expectedDate,
+      amount: effAmt,
+      name: row.name,
+    });
+
+    const existingMatch = existingSignatures.get(sig1) || existingSignatures.get(sig2);
+    if (existingMatch) {
+      duplicateRowNumbers.add(row.rowNumber);
+      reasonByRow.set(row.rowNumber, `Trùng với giao dịch ${existingMatch}`);
+      continue;
+    }
+
+    const batchDupRow = seenInBatch.get(sig1) || seenInBatch.get(sig2);
+    if (batchDupRow !== undefined) {
+      duplicateRowNumbers.add(row.rowNumber);
+      reasonByRow.set(row.rowNumber, `Trùng với dòng ${batchDupRow} trong file`);
+      continue;
+    }
+
+    seenInBatch.set(sig1, row.rowNumber);
+    seenInBatch.set(sig2, row.rowNumber);
+  }
+
+  return { duplicateRowNumbers, reasonByRow };
+}
+
+// =========================================================================
+// Global System Search
+// =========================================================================
+
+export type GlobalSearchModuleTarget =
+  | 'overview'
+  | 'transactions'
+  | 'accounts'
+  | 'budgets'
+  | 'savings'
+  | 'reports'
+  | 'archive'
+  | 'settings';
+
+export interface GlobalSearchResultItem {
+  id: string;
+  entityType: 'transaction' | 'account' | 'budget' | 'savings';
+  title: string;
+  subtitle: string;
+  amount?: number;
+  badge: string;
+  targetPage: GlobalSearchModuleTarget;
+  searchHint?: string;
+}
+
+export function searchGlobalEntities(params: {
+  query: string;
+  transactions: readonly Transaction[];
+  accounts: readonly FinancialAccount[];
+  budgets: readonly BudgetLimit[];
+  savingsGoals: readonly SavingsGoal[];
+  limit?: number;
+}): GlobalSearchResultItem[] {
+  const q = params.query.trim();
+  if (!q) return [];
+  const limit = Math.max(1, params.limit ?? 15);
+  const results: GlobalSearchResultItem[] = [];
+
+  for (const acc of params.accounts) {
+    if (matchesSearchTokens([acc.name, acc.bankName, acc.accountNumber, acc.type], q)) {
+      results.push({
+        id: `acc:${acc.id}`,
+        entityType: 'account',
+        title: acc.name,
+        subtitle: acc.bankName || acc.accountNumber || 'Nguồn tiền / Tài khoản',
+        amount: toVndInt(acc.currentBalance),
+        badge: 'Tài khoản',
+        targetPage: 'accounts',
+      });
+    }
+  }
+
+  for (const goal of params.savingsGoals) {
+    if (matchesSearchTokens([goal.name, goal.category, goal.note, goal.linkedAccountName], q)) {
+      results.push({
+        id: `sav:${goal.id}`,
+        entityType: 'savings',
+        title: goal.name,
+        subtitle: `Mục tiêu: ${formatVND(goal.targetAmount)}`,
+        amount: toVndInt(goal.currentAmount),
+        badge: 'Tiết kiệm',
+        targetPage: 'savings',
+      });
+    }
+  }
+
+  for (const b of params.budgets) {
+    if (matchesSearchTokens([b.name, b.scopeValue, b.yearMonth], q)) {
+      results.push({
+        id: `bdg:${b.id}`,
+        entityType: 'budget',
+        title: b.name,
+        subtitle: `${b.scopeValue} · ${b.yearMonth}`,
+        amount: toVndInt(b.limitAmount),
+        badge: 'Ngân sách',
+        targetPage: 'budgets',
+      });
+    }
+  }
+
+  for (const tx of params.transactions) {
+    if (
+      matchesSearchTokens(
+        [
+          tx.code,
+          tx.name,
+          tx.counterparty,
+          tx.description,
+          tx.reason,
+          tx.category,
+          tx.accountName,
+          tx.toAccountName,
+        ],
+        q
+      )
+    ) {
+      results.push({
+        id: `tx:${tx.id}`,
+        entityType: 'transaction',
+        title: `${tx.code} — ${tx.name}`,
+        subtitle: `${tx.category} · ${tx.accountName}${tx.toAccountName ? ` → ${tx.toAccountName}` : ''} · ${tx.status}`,
+        amount: getEffectiveTransactionAmount(tx),
+        badge: tx.isArchived ? 'Lưu trữ' : tx.kind === 'income' ? 'Thu' : tx.kind === 'transfer' ? 'Chuyển khoản' : 'Chi',
+        targetPage: tx.isArchived ? 'archive' : 'transactions',
+        searchHint: tx.code,
+      });
+    }
+  }
+
+  return results.slice(0, limit);
+}

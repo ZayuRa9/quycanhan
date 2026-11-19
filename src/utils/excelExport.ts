@@ -1,20 +1,41 @@
 import * as XLSX from 'xlsx';
-import type { BudgetLimit, FinancialAccount, Transaction } from '../types/finance';
+import type {
+  BudgetLimit,
+  FinancialAccount,
+  SavingsGoal,
+  Transaction,
+} from '../types/finance';
 import {
   computeFinancialSummary,
   computeMonthlySeries,
+  computePlannedVsActualReport,
   evaluateBudget,
+  evaluateSavingsGoal,
   formatDateVN,
   getEffectiveTransactionAmount,
 } from './financeRules';
+
+function getAccountTypeLabel(type: FinancialAccount['type']): string {
+  switch (type) {
+    case 'cash':
+      return 'Tiền mặt';
+    case 'bank':
+      return 'Ngân hàng';
+    case 'ewallet':
+      return 'Ví điện tử';
+    case 'savings':
+      return 'Tài khoản tiết kiệm';
+  }
+}
 
 export function exportFinanceWorkbook(params: {
   transactions: Transaction[];
   accounts: FinancialAccount[];
   budgets: BudgetLimit[];
+  savingsGoals?: SavingsGoal[];
   selectedYear: number;
 }) {
-  const { transactions, accounts, budgets, selectedYear } = params;
+  const { transactions, accounts, budgets, savingsGoals = [], selectedYear } = params;
   const wb = XLSX.utils.book_new();
   const summary = computeFinancialSummary(accounts, transactions);
 
@@ -26,15 +47,16 @@ export function exportFinanceWorkbook(params: {
     ['', ''],
     ['Chỉ tiêu tài chính', 'Giá trị (VNĐ)'],
     ['Tổng số tiền hiện có (tổng các quỹ/tài khoản)', summary.totalAvailableBalance],
-    ['Tổng tiền đã thu (thực tế)', summary.totalCollectedIncome],
-    ['Tổng tiền đã chi (thực tế)', summary.totalPaidExpense],
+    ['Tổng tiền đã thu (thực tế, không tính chuyển khoản)', summary.totalCollectedIncome],
+    ['Tổng tiền đã chi (thực tế, không tính chuyển khoản)', summary.totalPaidExpense],
     ['Số dư thực tế', summary.actualBalance],
     ['Chênh lệch thu - chi thực tế', summary.netRealizedCashflow],
     ['Tổng khoản thu đang chờ', summary.pendingIncome],
     ['Tổng khoản chi đang chờ thanh toán', summary.pendingExpense],
+    ['Tổng chuyển khoản nội bộ đã thực hiện (tham khảo)', summary.totalTransferVolume],
   ];
   const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
-  wsSummary['!cols'] = [{ wch: 45 }, { wch: 24 }];
+  wsSummary['!cols'] = [{ wch: 52 }, { wch: 24 }];
   XLSX.utils.book_append_sheet(wb, wsSummary, 'Tong_Hop');
 
   // Sheet 2: Khoan_Thu
@@ -129,7 +151,42 @@ export function exportFinanceWorkbook(params: {
   ];
   XLSX.utils.book_append_sheet(wb, wsExpense, 'Khoan_Chi');
 
-  // Sheet 4: Thong_Ke_Thang_Nam
+  // Sheet 4: Chuyen_Khoan_Noi_Bo
+  const transfers = transactions.filter((t) => t.kind === 'transfer');
+  const transferHeader = [
+    'Mã giao dịch',
+    'Ngày dự kiến',
+    'Ngày thực tế',
+    'Nội dung chuyển',
+    'Loại điều chuyển',
+    'Từ tài khoản',
+    'Đến tài khoản',
+    'Số tiền (VNĐ)',
+    'Trạng thái',
+    'Lưu trữ',
+    'Ghi chú',
+  ];
+  const transferRows = transfers.map((t) => [
+    t.code,
+    formatDateVN(t.expectedDate),
+    formatDateVN(t.actualDate),
+    t.name,
+    t.category,
+    t.accountName,
+    t.toAccountName || '—',
+    getEffectiveTransactionAmount(t),
+    t.status,
+    t.isArchived ? 'Đã lưu trữ' : 'Đang theo dõi',
+    t.description || '',
+  ]);
+  const wsTransfer = XLSX.utils.aoa_to_sheet([transferHeader, ...transferRows]);
+  wsTransfer['!cols'] = [
+    { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 28 }, { wch: 20 },
+    { wch: 22 }, { wch: 22 }, { wch: 18 }, { wch: 16 }, { wch: 16 }, { wch: 28 },
+  ];
+  XLSX.utils.book_append_sheet(wb, wsTransfer, 'Chuyen_Khoan');
+
+  // Sheet 5: Thong_Ke_Thang_Nam
   const monthly = computeMonthlySeries(transactions, selectedYear);
   const monthlyHeader = ['Tháng', `Tổng thu ${selectedYear} (VNĐ)`, `Tổng chi ${selectedYear} (VNĐ)`, 'Chênh lệch ròng (VNĐ)'];
   const monthlyData = monthly.map((m) => [
@@ -150,10 +207,25 @@ export function exportFinanceWorkbook(params: {
   wsMonthly['!cols'] = [{ wch: 24 }, { wch: 22 }, { wch: 22 }, { wch: 22 }];
   XLSX.utils.book_append_sheet(wb, wsMonthly, 'Thong_Ke_Thang_Nam');
 
-  // Sheet 5: Tai_Khoan_Ngan_Sach
+  // Sheet 6: Du_Kien_vs_Thuc_Te
+  const pva = computePlannedVsActualReport(transactions, { year: selectedYear });
+  const pvaHeader = ['Phân loại', 'Danh mục', 'Dự kiến (VNĐ)', 'Thực tế (VNĐ)', 'Chênh lệch (VNĐ)', 'Tỷ lệ thực hiện (%)'];
+  const pvaRows = pva.categories.map((c) => [
+    c.kind === 'income' ? 'Khoản thu' : 'Khoản chi',
+    c.category,
+    c.planned,
+    c.actual,
+    c.variance,
+    Number(c.achievementPct.toFixed(1)),
+  ]);
+  const wsPva = XLSX.utils.aoa_to_sheet([pvaHeader, ...pvaRows]);
+  wsPva['!cols'] = [{ wch: 14 }, { wch: 28 }, { wch: 18 }, { wch: 18 }, { wch: 18 }, { wch: 18 }];
+  XLSX.utils.book_append_sheet(wb, wsPva, 'Du_Kien_vs_Thuc_Te');
+
+  // Sheet 7: Tai_Khoan_Ngan_Sach
   const accHeader = ['Loại nguồn tiền', 'Tên tài khoản', 'Ngân hàng', 'Số TK', 'Số dư ban đầu', 'Số dư hiện tại', 'Số dư sao kê'];
   const accRows = accounts.map((a) => [
-    a.type === 'cash' ? 'Tiền mặt' : a.type === 'bank' ? 'Ngân hàng' : 'Ví điện tử',
+    getAccountTypeLabel(a.type),
     a.name,
     a.bankName || '',
     a.accountNumber || '',
@@ -183,9 +255,32 @@ export function exportFinanceWorkbook(params: {
     ...budgetRows,
   ]);
   wsAccBudget['!cols'] = [
-    { wch: 20 }, { wch: 24 }, { wch: 20 }, { wch: 18 }, { wch: 18 }, { wch: 18 }, { wch: 18 }, { wch: 14 },
+    { wch: 22 }, { wch: 24 }, { wch: 20 }, { wch: 18 }, { wch: 18 }, { wch: 18 }, { wch: 18 }, { wch: 14 },
   ];
   XLSX.utils.book_append_sheet(wb, wsAccBudget, 'Tai_Khoan_Ngan_Sach');
+
+  // Sheet 8: Muc_Tieu_Tiet_Kiem
+  if (savingsGoals.length > 0) {
+    const savHeader = ['Tên mục tiêu', 'Nhóm', 'Đã tích lũy (VNĐ)', 'Mục tiêu (VNĐ)', 'Còn thiếu (VNĐ)', 'Tiến độ (%)', 'Hạn đích', 'Trạng thái'];
+    const savRows = savingsGoals.map((g) => {
+      const ev = evaluateSavingsGoal(g);
+      return [
+        g.name,
+        g.category || '',
+        g.currentAmount,
+        g.targetAmount,
+        ev.remainingAmount,
+        Number(ev.percent.toFixed(1)),
+        g.targetDate ? formatDateVN(g.targetDate) : '—',
+        ev.isCompleted ? 'Hoàn thành' : g.status === 'paused' ? 'Tạm dừng' : 'Đang tích lũy',
+      ];
+    });
+    const wsSav = XLSX.utils.aoa_to_sheet([savHeader, ...savRows]);
+    wsSav['!cols'] = [
+      { wch: 28 }, { wch: 22 }, { wch: 18 }, { wch: 18 }, { wch: 18 }, { wch: 14 }, { wch: 14 }, { wch: 16 },
+    ];
+    XLSX.utils.book_append_sheet(wb, wsSav, 'Muc_Tieu_Tiet_Kiem');
+  }
 
   const todayTag = new Date().toISOString().slice(0, 10);
   XLSX.writeFile(wb, `BaoCao_TaiChinh_${selectedYear}_${todayTag}.xlsx`);

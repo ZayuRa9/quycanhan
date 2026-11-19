@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   ArrowDown,
   ArrowDownLeft,
+  ArrowLeftRight,
   ArrowUp,
   ArrowUpDown,
   ArrowUpRight,
@@ -13,6 +14,8 @@ import {
   Hourglass,
   Landmark,
   Minus,
+  PiggyBank,
+  Plus,
   Scale,
   Sheet,
   TrendingDown,
@@ -24,6 +27,7 @@ import {
   TRANSACTION_STATUSES,
   type BudgetLimit,
   type FinancialAccount,
+  type SavingsGoal,
   type Transaction,
 } from '../types/finance';
 import {
@@ -33,6 +37,7 @@ import {
   computeExpenseForecast,
   computeFinancialSummary,
   computeMonthlySeries,
+  computeSavingsSummary,
   formatDateVN,
   formatVND,
   getEffectiveTransactionAmount,
@@ -49,12 +54,16 @@ import {
 import { exportFinanceWorkbook } from '../utils/excelExport';
 import { ReminderCenter } from './ReminderCenter';
 import { StatusText } from './StatusText';
+import type { ActivePage } from './SidebarLayout';
 
 interface OverviewPageProps {
   accounts: FinancialAccount[];
   transactions: Transaction[];
   budgets: BudgetLimit[];
+  savingsGoals?: SavingsGoal[];
   expenseCategories: string[];
+  incomeCategories?: string[];
+  reminderLeadDays?: number;
   spreadsheetId?: string;
   hasWorkspaceToken: boolean;
   userEmail?: string;
@@ -63,6 +72,7 @@ interface OverviewPageProps {
   onTogglePush: () => void;
   onSyncGoogleSheet: () => Promise<{ spreadsheetUrl: string } | null>;
   onReconnectDrive: () => void;
+  onNavigate?: (page: ActivePage) => void;
 }
 
 const CHART_PALETTE = [
@@ -80,7 +90,10 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({
   accounts,
   transactions,
   budgets,
+  savingsGoals = [],
   expenseCategories,
+  incomeCategories,
+  reminderLeadDays = 3,
   spreadsheetId,
   hasWorkspaceToken,
   userEmail,
@@ -89,6 +102,7 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({
   onTogglePush,
   onSyncGoogleSheet,
   onReconnectDrive,
+  onNavigate,
 }) => {
   const currentYear = new Date().getFullYear();
   const [selectedMonth, setSelectedMonth] = useState<string>('ALL');
@@ -155,6 +169,11 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({
   const summary = useMemo(
     () => computeFinancialSummary(accounts, filteredTransactions),
     [accounts, filteredTransactions]
+  );
+
+  const savingsSummary = useMemo(
+    () => computeSavingsSummary(savingsGoals),
+    [savingsGoals]
   );
 
   const incomeRows = useMemo(
@@ -460,10 +479,114 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({
         </div>
       </section>
 
+      {/* Actionable Empty State Onboarding when accounts or transactions are missing */}
+      {(accounts.length === 0 || transactions.length === 0) && onNavigate && (
+        <section
+          aria-label="Hướng dẫn bắt đầu nhanh"
+          className="bg-white border border-blue-200/80 rounded-2xl p-5 shadow-xs flex flex-col md:flex-row md:items-center md:justify-between gap-4"
+        >
+          <div className="space-y-1">
+            <h2 className="font-display text-base font-bold text-[#0B1437]">
+              {accounts.length === 0
+                ? 'Bước 1: Tạo tài khoản hoặc ví tiền đầu tiên'
+                : 'Bước 2: Ghi nhận giao dịch thu / chi đầu tiên'}
+            </h2>
+            <p className="text-xs text-slate-600">
+              {accounts.length === 0
+                ? 'Thiết lập tiền mặt, ngân hàng hoặc ví điện tử để hệ thống theo dõi số dư thực tế chính xác.'
+                : 'Số dư và báo cáo tự động cập nhật ngay khi bạn tạo giao dịch hoặc nhập từ file Excel mẫu.'}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+            {accounts.length === 0 && (
+              <button
+                type="button"
+                onClick={() => onNavigate('accounts')}
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#0B1437] text-white text-xs font-bold rounded-xl hover:bg-blue-900 transition-colors whitespace-nowrap"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Thêm tài khoản</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => onNavigate('transactions')}
+              className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white text-xs font-bold rounded-xl hover:bg-blue-700 transition-colors whitespace-nowrap"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Tạo giao dịch</span>
+            </button>
+          </div>
+        </section>
+      )}
+
+      {/* Savings Goals & Internal Transfer Snapshot Strip */}
+      <section
+        aria-label="Tích lũy mục tiêu và chuyển khoản nội bộ"
+        className="grid grid-cols-1 md:grid-cols-2 gap-4"
+      >
+        <div className="bg-white border border-slate-200/80 rounded-2xl p-4 sm:p-5 shadow-xs flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-xl bg-teal-50 text-teal-700 flex items-center justify-center shrink-0">
+              <PiggyBank className="w-5 h-5" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                Mục tiêu tiết kiệm ({savingsGoals.length})
+              </p>
+              <p className="text-base sm:text-lg font-extrabold font-mono tabular-nums text-teal-800 truncate">
+                {formatVND(savingsSummary.totalAccumulated)}{' '}
+                <span className="text-xs font-medium text-slate-500">
+                  / {formatVND(savingsSummary.totalTarget)} ({savingsSummary.overallPercent.toFixed(1)}%)
+                </span>
+              </p>
+            </div>
+          </div>
+          {onNavigate && (
+            <button
+              type="button"
+              onClick={() => onNavigate('savings')}
+              className="px-3 py-1.5 text-xs font-bold text-teal-700 bg-teal-50 hover:bg-teal-100 rounded-xl transition-colors whitespace-nowrap shrink-0"
+            >
+              Xem tiết kiệm
+            </button>
+          )}
+        </div>
+
+        <div className="bg-white border border-slate-200/80 rounded-2xl p-4 sm:p-5 shadow-xs flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-700 flex items-center justify-center shrink-0">
+              <ArrowLeftRight className="w-5 h-5" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                Chuyển khoản nội bộ kỳ lọc
+              </p>
+              <p className="text-base sm:text-lg font-extrabold font-mono tabular-nums text-indigo-800 truncate">
+                {formatVND(summary.totalTransferVolume)}{' '}
+                <span className="text-xs font-medium text-slate-500">
+                  (Không tính vào thu/chi)
+                </span>
+              </p>
+            </div>
+          </div>
+          {onNavigate && (
+            <button
+              type="button"
+              onClick={() => onNavigate('reports')}
+              className="px-3 py-1.5 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-xl transition-colors whitespace-nowrap shrink-0"
+            >
+              Xem báo cáo
+            </button>
+          )}
+        </div>
+      </section>
+
       {/* Automatic Transaction Reminders (Read-Only on Overview) */}
       <ReminderCenter
         transactions={transactions}
         userEmail={userEmail}
+        defaultLeadDays={reminderLeadDays}
         pushPermission={pushPermission}
         pushEnabled={pushEnabled}
         onTogglePush={onTogglePush}
@@ -526,7 +649,10 @@ export const OverviewPage: React.FC<OverviewPageProps> = ({
               className="w-full h-9 px-2.5 text-sm bg-slate-50/60 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-600 focus:bg-white"
             >
               <option value="ALL">Tất cả loại thu</option>
-              {INCOME_CATEGORIES.map((cat) => (
+              {(incomeCategories && incomeCategories.length > 0
+                ? incomeCategories
+                : INCOME_CATEGORIES
+              ).map((cat) => (
                 <option key={cat} value={cat}>
                   {cat}
                 </option>

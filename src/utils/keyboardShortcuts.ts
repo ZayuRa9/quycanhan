@@ -1,10 +1,23 @@
-export type ShortcutNavPage = 'overview' | 'transactions' | 'archive';
+export type ShortcutNavPage =
+  | 'overview'
+  | 'transactions'
+  | 'accounts'
+  | 'budgets'
+  | 'savings'
+  | 'reports'
+  | 'archive'
+  | 'settings';
 
-export type ModalLayerState = 'none' | 'quick_transaction' | 'shortcuts_help';
+export type ModalLayerState =
+  | 'none'
+  | 'quick_transaction'
+  | 'expense_categories'
+  | 'shortcuts_help';
 
 export type ShortcutAction =
   | { type: 'navigate'; page: ShortcutNavPage }
   | { type: 'open_quick_transaction' }
+  | { type: 'focus_global_search' }
   | { type: 'toggle_shortcuts_help' }
   | { type: 'close_modal' }
   | { type: 'submit_modal' };
@@ -34,32 +47,30 @@ export interface ShortcutCatalogGroup {
 
 export const SHORTCUT_GROUPS: ShortcutCatalogGroup[] = [
   {
-    title: 'Điều hướng trang',
+    title: 'Điều hướng 8 phân hệ',
     items: [
-      {
-        keys: ['1'],
-        label: 'Tổng quan',
-        description: 'Chuyển nhanh đến trang Tổng quan tài chính',
-      },
-      {
-        keys: ['2'],
-        label: 'Thu & Chi',
-        description: 'Chuyển nhanh đến trang Thu & Chi và Ngân sách',
-      },
-      {
-        keys: ['3'],
-        label: 'Lưu trữ',
-        description: 'Chuyển nhanh đến trang Lưu trữ chứng từ & Nhật ký',
-      },
+      { keys: ['1'], label: 'Tổng quan', description: 'Dashboard tổng quan tài chính & chỉ số chính' },
+      { keys: ['2'], label: 'Giao dịch', description: 'Thu nhập, chi tiêu & chuyển khoản nội bộ' },
+      { keys: ['3'], label: 'Tài khoản', description: 'Quỹ tiền mặt, ngân hàng, ví điện tử & tiết kiệm' },
+      { keys: ['4'], label: 'Ngân sách', description: 'Hạn mức chi tiêu & cảnh báo vượt ngưỡng' },
+      { keys: ['5'], label: 'Tiết kiệm', description: 'Mục tiêu tích lũy & lịch sử gửi tiết kiệm' },
+      { keys: ['6'], label: 'Báo cáo', description: 'So sánh dự kiến vs thực tế, xuất Excel & PDF' },
+      { keys: ['7'], label: 'Lưu trữ', description: 'Hồ sơ hoàn thành, chứng từ, nhật ký & phục hồi' },
+      { keys: ['8'], label: 'Cài đặt', description: 'Danh mục, cấu hình, bảo mật & sao lưu' },
     ],
   },
   {
-    title: 'Thao tác giao dịch nhanh',
+    title: 'Thao tác nhanh & Tìm kiếm',
     items: [
+      {
+        keys: ['Ctrl / ⌘', 'K'],
+        label: 'Tìm kiếm toàn hệ thống',
+        description: 'Nhảy nhanh vào ô tìm kiếm tổng hợp trên mọi trang',
+      },
       {
         keys: ['N'],
         label: 'Tạo giao dịch mới',
-        description: 'Mở nhanh modal tạo khoản thu hoặc khoản chi từ mọi trang',
+        description: 'Mở nhanh modal tạo thu, chi hoặc chuyển khoản nội bộ',
       },
       {
         keys: ['Ctrl / ⌘', 'Enter'],
@@ -107,6 +118,28 @@ export function isEditableTarget(target: unknown): boolean {
   return false;
 }
 
+const DIGIT_PAGE_MAP: Record<string, ShortcutNavPage> = {
+  '1': 'overview',
+  '2': 'transactions',
+  '3': 'accounts',
+  '4': 'budgets',
+  '5': 'savings',
+  '6': 'reports',
+  '7': 'archive',
+  '8': 'settings',
+};
+
+const CODE_PAGE_MAP: Record<string, ShortcutNavPage> = {
+  Digit1: 'overview',
+  Digit2: 'transactions',
+  Digit3: 'accounts',
+  Digit4: 'budgets',
+  Digit5: 'savings',
+  Digit6: 'reports',
+  Digit7: 'archive',
+  Digit8: 'settings',
+};
+
 export function resolveKeyboardShortcut(
   input: KeyboardShortcutInput
 ): ShortcutAction | null {
@@ -124,6 +157,15 @@ export function resolveKeyboardShortcut(
     input.modalState === 'quick_transaction'
   ) {
     return { type: 'submit_modal' };
+  }
+
+  if (
+    (input.ctrlKey || input.metaKey) &&
+    !input.altKey &&
+    key.toLowerCase() === 'k' &&
+    input.modalState === 'none'
+  ) {
+    return { type: 'focus_global_search' };
   }
 
   // Never intercept browser/OS Ctrl or Cmd combos
@@ -154,14 +196,11 @@ export function resolveKeyboardShortcut(
     return null;
   }
 
-  if (key === '1' || (input.altKey && code === 'Digit1')) {
-    return { type: 'navigate', page: 'overview' };
+  if (DIGIT_PAGE_MAP[key]) {
+    return { type: 'navigate', page: DIGIT_PAGE_MAP[key] };
   }
-  if (key === '2' || (input.altKey && code === 'Digit2')) {
-    return { type: 'navigate', page: 'transactions' };
-  }
-  if (key === '3' || (input.altKey && code === 'Digit3')) {
-    return { type: 'navigate', page: 'archive' };
+  if (input.altKey && CODE_PAGE_MAP[code]) {
+    return { type: 'navigate', page: CODE_PAGE_MAP[code] };
   }
 
   if (key.toLowerCase() === 'n' || (input.altKey && code === 'KeyN')) {

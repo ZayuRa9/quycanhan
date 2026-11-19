@@ -351,16 +351,23 @@ export async function syncTransactionStatusMetadataOnDrive(params: {
   }
 
   const metadataName = `${tx.code}_TRANG_THAI.json`;
+  const kindLabel =
+    tx.kind === 'income'
+      ? 'KHOẢN THU'
+      : tx.kind === 'transfer'
+      ? 'CHUYỂN KHOẢN NỘI BỘ'
+      : 'KHOẢN CHI';
   const payload = JSON.stringify(
     {
       code: tx.code,
-      kind: tx.kind === 'income' ? 'KHOẢN THU' : 'KHOẢN CHI',
+      kind: kindLabel,
       name: tx.name,
       amount: tx.amount,
       actualAmount: tx.actualAmount ?? null,
       status: tx.status,
       isArchived: tx.isArchived,
       accountName: tx.accountName,
+      toAccountName: tx.toAccountName ?? null,
       expectedDate: formatDateVN(tx.expectedDate),
       actualDate: tx.actualDate ? formatDateVN(tx.actualDate) : null,
       driveFolderPath: hierarchy.folderPath,
@@ -463,6 +470,7 @@ export async function syncLedgerToGoogleSheet(params: {
     ? `https://docs.google.com/spreadsheets/d/${spreadsheetId}`
     : '';
 
+  let existingTitles = new Set<string>();
   if (spreadsheetId) {
     const checkRes = await driveFetch(
       `${SHEETS_API_URL}/${spreadsheetId}?fields=spreadsheetId,spreadsheetUrl,sheets.properties.title`,
@@ -471,8 +479,14 @@ export async function syncLedgerToGoogleSheet(params: {
     if (!checkRes.ok) {
       spreadsheetId = undefined;
     } else {
-      const info = (await checkRes.json()) as { spreadsheetUrl?: string };
+      const info = (await checkRes.json()) as {
+        spreadsheetUrl?: string;
+        sheets?: Array<{ properties?: { title?: string } }>;
+      };
       spreadsheetUrl = info.spreadsheetUrl || spreadsheetUrl;
+      existingTitles = new Set(
+        (info.sheets || []).map((s) => s.properties?.title || '').filter(Boolean)
+      );
     }
   }
 
@@ -485,6 +499,7 @@ export async function syncLedgerToGoogleSheet(params: {
         sheets: [
           { properties: { title: 'Khoan_Thu' } },
           { properties: { title: 'Khoan_Chi' } },
+          { properties: { title: 'Chuyen_Khoan' } },
           { properties: { title: 'Tai_Khoan' } },
         ],
       }),
@@ -499,6 +514,28 @@ export async function syncLedgerToGoogleSheet(params: {
     };
     spreadsheetId = created.spreadsheetId;
     spreadsheetUrl = created.spreadsheetUrl;
+  } else {
+    const requiredTabs = ['Khoan_Thu', 'Khoan_Chi', 'Chuyen_Khoan', 'Tai_Khoan'];
+    const missingTabs = requiredTabs.filter((t) => !existingTitles.has(t));
+    if (missingTabs.length > 0) {
+      const addRes = await driveFetch(
+        `${SHEETS_API_URL}/${spreadsheetId}:batchUpdate`,
+        accessToken,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            requests: missingTabs.map((title) => ({
+              addSheet: { properties: { title } },
+            })),
+          }),
+        }
+      );
+      if (!addRes.ok) {
+        const errText = await addRes.text();
+        throw new Error(`Không thể bổ sung trang tính mới vào Google Sheet: ${errText}`);
+      }
+    }
   }
 
   const incomeRows = [
@@ -543,11 +580,36 @@ export async function syncLedgerToGoogleSheet(params: {
       ]),
   ];
 
+  const transferRows = [
+    ['Mã GD', 'Nội dung điều chuyển', 'Loại', 'Hình thức', 'Từ tài khoản', 'Đến tài khoản', 'Ngày dự kiến', 'Ngày thực tế', 'Số tiền', 'Trạng thái', 'Lưu trữ'],
+    ...transactions
+      .filter((t) => t.kind === 'transfer')
+      .map((t) => [
+        t.code,
+        t.name,
+        t.category,
+        t.method,
+        t.accountName,
+        t.toAccountName || '—',
+        formatDateVN(t.expectedDate),
+        formatDateVN(t.actualDate),
+        getEffectiveTransactionAmount(t),
+        t.status,
+        t.isArchived ? 'Đã lưu trữ' : 'Đang xử lý',
+      ]),
+  ];
+
   const accountRows = [
     ['Tên tài khoản', 'Loại', 'Ngân hàng', 'Số tài khoản', 'Số dư ban đầu', 'Số dư hiện tại', 'Số dư sao kê thực tế', 'Đối chiếu gần nhất'],
     ...accounts.map((a) => [
       a.name,
-      a.type === 'cash' ? 'Tiền mặt' : a.type === 'bank' ? 'Ngân hàng' : 'Ví điện tử',
+      a.type === 'cash'
+        ? 'Tiền mặt'
+        : a.type === 'bank'
+        ? 'Ngân hàng'
+        : a.type === 'savings'
+        ? 'Tiết kiệm'
+        : 'Ví điện tử',
       a.bankName || '',
       a.accountNumber || '',
       a.initialBalance,
@@ -564,7 +626,7 @@ export async function syncLedgerToGoogleSheet(params: {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        ranges: ['Khoan_Thu!A1:Z5000', 'Khoan_Chi!A1:Z5000', 'Tai_Khoan!A1:Z1000'],
+        ranges: ['Khoan_Thu!A1:Z5000', 'Khoan_Chi!A1:Z5000', 'Chuyen_Khoan!A1:Z5000', 'Tai_Khoan!A1:Z1000'],
       }),
     }
   );
@@ -584,6 +646,7 @@ export async function syncLedgerToGoogleSheet(params: {
         data: [
           { range: 'Khoan_Thu!A1', values: incomeRows },
           { range: 'Khoan_Chi!A1', values: expenseRows },
+          { range: 'Chuyen_Khoan!A1', values: transferRows },
           { range: 'Tai_Khoan!A1', values: accountRows },
         ],
       }),
@@ -597,19 +660,79 @@ export async function syncLedgerToGoogleSheet(params: {
   return { spreadsheetId, spreadsheetUrl };
 }
 
+export async function uploadJsonBackupToDrive(params: {
+  accessToken: string;
+  jsonContent: string;
+  fileName: string;
+  cachedRootFolderId?: string;
+}): Promise<{ fileId: string; webViewLink: string; rootFolderId: string }> {
+  const { accessToken, jsonContent, fileName, cachedRootFolderId } = params;
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const hierarchy = await ensureDriveFolderHierarchy(accessToken, todayIso, cachedRootFolderId);
+  const backupFolder = await getOrCreateFolder(accessToken, 'Backups', hierarchy.rootFolderId);
+
+  const boundary = `backup_${crypto.randomUUID()}`;
+  const metadata = JSON.stringify({
+    name: fileName,
+    parents: [backupFolder.id],
+    mimeType: 'application/json',
+    description: `Bản sao lưu dữ liệu Sổ Quỹ Cá Nhân ngày ${formatDateVN(todayIso)}`,
+    appProperties: {
+      recordType: 'ledger_json_backup',
+      exportedDate: todayIso,
+    },
+  });
+
+  const body =
+    `--${boundary}\r\n` +
+    `Content-Type: application/json; charset=UTF-8\r\n\r\n` +
+    `${metadata}\r\n` +
+    `--${boundary}\r\n` +
+    `Content-Type: application/json; charset=UTF-8\r\n\r\n` +
+    `${jsonContent}\r\n` +
+    `--${boundary}--`;
+
+  const uploadRes = await driveFetch(
+    `${DRIVE_UPLOAD_URL}?uploadType=multipart&fields=id,webViewLink`,
+    accessToken,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': `multipart/related; boundary=${boundary}`,
+      },
+      body,
+    }
+  );
+  if (!uploadRes.ok) {
+    const errText = await uploadRes.text();
+    throw new Error(`Không thể tải bản sao lưu lên Google Drive: ${errText}`);
+  }
+  const uploaded = (await uploadRes.json()) as { id: string; webViewLink?: string };
+  return {
+    fileId: uploaded.id,
+    webViewLink: uploaded.webViewLink || `https://drive.google.com/file/d/${uploaded.id}/view`,
+    rootFolderId: hierarchy.rootFolderId,
+  };
+}
+
 export async function createCalendarReminder(params: {
   accessToken: string;
   tx: Transaction;
 }): Promise<{ eventId: string; htmlLink: string }> {
   const { accessToken, tx } = params;
   const dateStr = tx.expectedDate || new Date().toISOString().slice(0, 10);
-  const titlePrefix = tx.kind === 'income' ? '[Thu dự kiến]' : '[Hạn thanh toán]';
+  const titlePrefix =
+    tx.kind === 'income'
+      ? '[Thu dự kiến]'
+      : tx.kind === 'transfer'
+      ? '[Chuyển khoản nội bộ]'
+      : '[Hạn thanh toán]';
   const res = await driveFetch(CALENDAR_API_URL, accessToken, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       summary: `${titlePrefix} ${tx.code} — ${tx.name}`,
-      description: `Số tiền: ${tx.amount.toLocaleString('vi-VN')} ₫\nLoại: ${tx.category}\nTài khoản: ${tx.accountName}\nĐối tác: ${tx.counterparty || '—'}\n${tx.description || ''}`,
+      description: `Số tiền: ${tx.amount.toLocaleString('vi-VN')} ₫\nLoại: ${tx.category}\nTài khoản: ${tx.accountName}${tx.toAccountName ? ` → ${tx.toAccountName}` : ''}\nĐối tác: ${tx.counterparty || '—'}\n${tx.description || ''}`,
       start: { date: dateStr },
       end: { date: dateStr },
       reminders: { useDefault: true },
@@ -632,13 +755,18 @@ export async function createFinancialTask(params: {
 }): Promise<{ taskId: string }> {
   const { accessToken, tx } = params;
   const dueDate = tx.expectedDate ? `${tx.expectedDate}T09:00:00.000Z` : undefined;
-  const actionLabel = tx.kind === 'income' ? 'Theo dõi thu tiền' : 'Thanh toán khoản chi';
+  const actionLabel =
+    tx.kind === 'income'
+      ? 'Theo dõi thu tiền'
+      : tx.kind === 'transfer'
+      ? 'Thực hiện chuyển khoản'
+      : 'Thanh toán khoản chi';
   const res = await driveFetch(`${TASKS_API_URL}/lists/@default/tasks`, accessToken, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       title: `${actionLabel}: ${tx.code} — ${tx.name}`,
-      notes: `Số tiền: ${tx.amount.toLocaleString('vi-VN')} ₫ | Loại: ${tx.category} | Tài khoản: ${tx.accountName}`,
+      notes: `Số tiền: ${tx.amount.toLocaleString('vi-VN')} ₫ | Loại: ${tx.category} | Tài khoản: ${tx.accountName}${tx.toAccountName ? ` → ${tx.toAccountName}` : ''}`,
       due: dueDate,
     }),
   });

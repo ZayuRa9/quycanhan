@@ -5,12 +5,15 @@ import {
   INCOME_CATEGORIES,
   INCOME_METHODS,
   TRANSACTION_STATUSES,
+  TRANSFER_CATEGORIES,
+  TRANSFER_METHODS,
   type AccountType,
   type BudgetScopeType,
   type ExpenseStatus,
   type IncomeStatus,
+  type TransactionKind,
 } from '../types/finance';
-import { normalizeTransactionStatus } from './financeRules';
+import { normalizeTransactionStatus, toVndInt } from './financeRules';
 
 export const TEMPLATE_SHEET_NAME = 'Nhap_Lieu_Tai_Chinh';
 
@@ -43,13 +46,14 @@ export interface ParsedAccountRow {
 
 export interface ParsedTransactionRow {
   rowNumber: number;
-  kind: 'income' | 'expense';
+  kind: TransactionKind;
   name: string;
   category: string;
   amount: number;
   actualAmount?: number;
   method: string;
   accountName: string;
+  toAccountName?: string;
   counterparty?: string;
   expectedDate: string;
   actualDate?: string;
@@ -72,6 +76,7 @@ export interface SingleSheetParseResult {
   accounts: ParsedAccountRow[];
   incomes: ParsedTransactionRow[];
   expenses: ParsedTransactionRow[];
+  transfers: ParsedTransactionRow[];
   budgets: ParsedBudgetRow[];
   errors: string[];
 }
@@ -79,7 +84,6 @@ export interface SingleSheetParseResult {
 export function normalizeExcelDate(raw: unknown): string {
   if (raw === null || raw === undefined || raw === '') return '';
   if (typeof raw === 'number' && Number.isFinite(raw)) {
-    // Excel serial date
     const utcDays = Math.floor(raw - 25569);
     const d = new Date(utcDays * 86400 * 1000);
     if (!Number.isNaN(d.getTime())) {
@@ -111,6 +115,7 @@ export function parseNumericCell(raw: unknown): number {
 
 function mapAccountType(raw: string): AccountType {
   const lower = raw.trim().toLowerCase();
+  if (lower.includes('tiết kiệm') || lower === 'savings') return 'savings';
   if (lower.includes('mặt') || lower === 'cash') return 'cash';
   if (lower.includes('ví') || lower === 'ewallet') return 'ewallet';
   return 'bank';
@@ -129,6 +134,7 @@ export function parseSingleSheetRows(rows: unknown[][]): SingleSheetParseResult 
     accounts: [],
     incomes: [],
     expenses: [],
+    transfers: [],
     budgets: [],
     errors: [],
   };
@@ -138,7 +144,6 @@ export function parseSingleSheetRows(rows: unknown[][]): SingleSheetParseResult 
     return result;
   }
 
-  // Locate header row dynamically (supports both styled template starting at row 4 and plain tables at row 1)
   let headerRowIdx = -1;
   for (let i = 0; i < Math.min(10, rows.length); i++) {
     const firstCell = String(rows[i]?.[0] ?? '').trim().toLowerCase();
@@ -165,7 +170,6 @@ export function parseSingleSheetRows(rows: unknown[][]): SingleSheetParseResult 
 
     if (!rawGroup && !name) continue;
 
-    // Skip explanatory guide rows if user kept one
     if (rawGroup.startsWith('(') || rawGroup.toLowerCase().startsWith('ví dụ')) {
       continue;
     }
@@ -198,8 +202,8 @@ export function parseSingleSheetRows(rows: unknown[][]): SingleSheetParseResult 
         rowNumber: excelRowNum,
         type: mapAccountType(detailType || 'Ngân hàng'),
         name,
-        initialBalance: amountPrimary,
-        currentBalance: Number.isFinite(amountSecondary) ? amountSecondary : amountPrimary,
+        initialBalance: toVndInt(amountPrimary),
+        currentBalance: Number.isFinite(amountSecondary) ? toVndInt(amountSecondary) : toVndInt(amountPrimary),
         bankName: colMethodOrBank || undefined,
         accountNumber: colAccountOrNumber || undefined,
       });
@@ -221,7 +225,7 @@ export function parseSingleSheetRows(rows: unknown[][]): SingleSheetParseResult 
         scopeType,
         scopeValue,
         yearMonth,
-        limitAmount: amountPrimary,
+        limitAmount: toVndInt(amountPrimary),
       });
     } else if (groupLower === 'thu' || groupLower === 'khoản thu') {
       if (!Number.isFinite(amountPrimary) || amountPrimary < 0) {
@@ -248,8 +252,8 @@ export function parseSingleSheetRows(rows: unknown[][]): SingleSheetParseResult 
         kind: 'income',
         name,
         category: matchedCat,
-        amount: amountPrimary,
-        actualAmount: Number.isFinite(amountSecondary) ? amountSecondary : undefined,
+        amount: toVndInt(amountPrimary),
+        actualAmount: Number.isFinite(amountSecondary) ? toVndInt(amountSecondary) : undefined,
         method: matchedMethod,
         accountName: colAccountOrNumber || 'Tiền mặt cá nhân',
         counterparty: colCounterpartyOrScopeVal || undefined,
@@ -285,8 +289,8 @@ export function parseSingleSheetRows(rows: unknown[][]): SingleSheetParseResult 
         kind: 'expense',
         name,
         category: matchedCat,
-        amount: amountPrimary,
-        actualAmount: Number.isFinite(amountSecondary) ? amountSecondary : undefined,
+        amount: toVndInt(amountPrimary),
+        actualAmount: Number.isFinite(amountSecondary) ? toVndInt(amountSecondary) : undefined,
         method: matchedMethod,
         accountName: colAccountOrNumber || 'Tiền mặt cá nhân',
         counterparty: colCounterpartyOrScopeVal || undefined,
@@ -297,9 +301,50 @@ export function parseSingleSheetRows(rows: unknown[][]): SingleSheetParseResult 
         purposeTag: colPurpose || undefined,
         description: colDesc || undefined,
       });
+    } else if (groupLower === 'chuyển khoản' || groupLower === 'chuyển tiền') {
+      if (!Number.isFinite(amountPrimary) || amountPrimary <= 0) {
+        result.errors.push(`Dòng ${excelRowNum}: Số tiền chuyển khoản "${name}" phải > 0.`);
+        continue;
+      }
+      if (!colCounterpartyOrScopeVal || colCounterpartyOrScopeVal.toLowerCase() === colAccountOrNumber.toLowerCase()) {
+        result.errors.push(`Dòng ${excelRowNum}: Chuyển khoản "${name}" cần cột Tài khoản đích (Cột H) khác Tài khoản nguồn (Cột G).`);
+        continue;
+      }
+      const matchedCat =
+        TRANSFER_CATEGORIES.find((c) => c.toLowerCase() === detailType.toLowerCase()) ||
+        detailType ||
+        TRANSFER_CATEGORIES[0];
+      const matchedMethod =
+        TRANSFER_METHODS.find((m) => m.toLowerCase() === colMethodOrBank.toLowerCase()) ||
+        colMethodOrBank ||
+        TRANSFER_METHODS[0];
+      const matchedStatus = colStatus
+        ? TRANSACTION_STATUSES.find((s) => s.toLowerCase() === colStatus.toLowerCase()) ||
+          normalizeTransactionStatus(colStatus)
+        : 'Dự kiến';
+      const expectedDate = normalizeExcelDate(colExpectedOrYm) || todayIso;
+      const actualDate = normalizeExcelDate(colActualDate) || undefined;
+
+      result.transfers.push({
+        rowNumber: excelRowNum,
+        kind: 'transfer',
+        name,
+        category: matchedCat,
+        amount: toVndInt(amountPrimary),
+        actualAmount: Number.isFinite(amountSecondary) ? toVndInt(amountSecondary) : undefined,
+        method: matchedMethod,
+        accountName: colAccountOrNumber || 'Tiền mặt cá nhân',
+        toAccountName: colCounterpartyOrScopeVal,
+        expectedDate,
+        actualDate,
+        status: matchedStatus,
+        sourceOrReason: colSourceOrReason || undefined,
+        purposeTag: colPurpose || undefined,
+        description: colDesc || undefined,
+      });
     } else {
       result.errors.push(
-        `Dòng ${excelRowNum}: Nhóm dữ liệu "${rawGroup}" không hợp lệ (chỉ nhận: Tài khoản, Thu, Chi, Hạn mức).`
+        `Dòng ${excelRowNum}: Nhóm dữ liệu "${rawGroup}" không hợp lệ (nhận: Tài khoản, Thu, Chi, Chuyển khoản, Hạn mức).`
       );
     }
   }
@@ -311,7 +356,7 @@ export function parseSingleSheetWorkbook(buffer: ArrayBuffer): SingleSheetParseR
   const wb = XLSX.read(buffer, { type: 'array' });
   const firstSheetName = wb.SheetNames[0];
   if (!firstSheetName) {
-    return { accounts: [], incomes: [], expenses: [], budgets: [], errors: ['Không tìm thấy sheet nào trong file Excel.'] };
+    return { accounts: [], incomes: [], expenses: [], transfers: [], budgets: [], errors: ['Không tìm thấy sheet nào trong file Excel.'] };
   }
   const ws = wb.Sheets[firstSheetName];
   const rows = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, defval: '' });
@@ -322,17 +367,16 @@ export function downloadSingleSheetTemplate() {
   const wb = XLSX.utils.book_new();
 
   const titleRow = [
-    'MẪU NHẬP LIỆU TÀI CHÍNH CÁ NHÂN (THU · CHI · TÀI KHOẢN · HẠN MỨC NGÂN SÁCH)',
+    'MẪU NHẬP LIỆU TÀI CHÍNH CÁ NHÂN (THU · CHI · CHUYỂN KHOẢN · TÀI KHOẢN · HẠN MỨC)',
     ...Array(TEMPLATE_HEADERS.length - 1).fill(''),
   ];
   const guideRow = [
-    'Quy ước: Cột A nhập [Tài khoản | Thu | Chi | Hạn mức]. Ngày nhập DD/MM/YYYY (ví dụ 19/11/2026) hoặc YYYY-MM (cho Hạn mức). Số tiền nhập số nguyên VNĐ. Toàn bộ nhập trong 1 sheet duy nhất.',
+    'Quy ước: Cột A nhập [Tài khoản | Thu | Chi | Chuyển khoản | Hạn mức]. Với Chuyển khoản: Cột G = TK nguồn, Cột H = TK đích. Ngày nhập DD/MM/YYYY. Số tiền nguyên VNĐ.',
     ...Array(TEMPLATE_HEADERS.length - 1).fill(''),
   ];
   const spacerRow = Array(TEMPLATE_HEADERS.length).fill('');
   const headerRow = [...TEMPLATE_HEADERS];
 
-  // 40 clean ready-to-fill blank formatted rows (zero fake transactions)
   const emptyRows = Array.from({ length: 40 }, () =>
     Array(TEMPLATE_HEADERS.length).fill('')
   );
@@ -347,7 +391,6 @@ export function downloadSingleSheetTemplate() {
     right: { style: 'thin', color: { rgb: 'CBD5E1' } },
   };
 
-  // Style Title Banner (Row 1)
   for (let c = 0; c < TEMPLATE_HEADERS.length; c++) {
     const ref = XLSX.utils.encode_cell({ r: 0, c });
     ws[ref].s = {
@@ -357,7 +400,6 @@ export function downloadSingleSheetTemplate() {
     };
   }
 
-  // Style Guide Row (Row 2)
   for (let c = 0; c < TEMPLATE_HEADERS.length; c++) {
     const ref = XLSX.utils.encode_cell({ r: 1, c });
     ws[ref].s = {
@@ -367,7 +409,6 @@ export function downloadSingleSheetTemplate() {
     };
   }
 
-  // Style Header Row (Row 4 -> index 3)
   for (let c = 0; c < TEMPLATE_HEADERS.length; c++) {
     const ref = XLSX.utils.encode_cell({ r: 3, c });
     ws[ref].s = {
@@ -378,7 +419,6 @@ export function downloadSingleSheetTemplate() {
     };
   }
 
-  // Style 40 clean input rows
   for (let r = 4; r < 44; r++) {
     const zebraFill = r % 2 === 0 ? 'FFFFFF' : 'F8FAFC';
     for (let c = 0; c < TEMPLATE_HEADERS.length; c++) {

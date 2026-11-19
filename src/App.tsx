@@ -5,10 +5,16 @@ import { SignInScreen } from './components/SignInScreen';
 import { SidebarLayout, type ActivePage } from './components/SidebarLayout';
 import { OverviewPage } from './components/OverviewPage';
 import { TransactionsPage } from './components/TransactionsPage';
+import { AccountsPage } from './components/AccountsPage';
+import { BudgetsPage } from './components/BudgetsPage';
+import { SavingsPage } from './components/SavingsPage';
+import { ReportsPage } from './components/ReportsPage';
 import { ArchivePage } from './components/ArchivePage';
+import { SettingsPage } from './components/SettingsPage';
 import { DashboardSkeleton } from './components/DashboardSkeleton';
 import { QuickTransactionModal } from './components/QuickTransactionModal';
 import { KeyboardShortcutsModal } from './components/KeyboardShortcutsModal';
+import { ExpenseCategoriesModal } from './components/ExpenseCategoriesModal';
 import { ToastContainer, type ToastItem, type ToastVariant } from './components/ToastContainer';
 import type { QueuedUploadFile } from './components/DriveUploader';
 import {
@@ -21,22 +27,33 @@ import {
 import {
   createAccount,
   createBudgetLimit,
+  createSavingsGoal,
   deleteBudgetLimit,
+  deleteSavingsGoal,
   deleteTransactionConfirmed,
   ensureUserProfile,
   exportFullBackupData,
   peekNextTransactionCode,
   reconcileAccount,
+  recordBackupHistory,
+  recordSavingsContribution,
   reserveAndCreateTransaction,
   restoreBackupData,
+  restoreTransactionFromArchive,
   subscribeAccounts,
   subscribeAuditLogs,
+  subscribeBackupHistory,
   subscribeBudgets,
+  subscribeSavingsContributions,
+  subscribeSavingsGoals,
   subscribeTransactions,
   subscribeUserProfile,
   updateAccount,
+  updateBudgetLimit,
+  updateSavingsGoal,
   updateTransactionRecord,
   updateUserWorkspaceMeta,
+  writeAuditLog,
 } from './services/firestoreLedger';
 import {
   createCalendarReminder,
@@ -44,29 +61,37 @@ import {
   deleteDriveFile,
   syncLedgerToGoogleSheet,
   syncTransactionStatusMetadataOnDrive,
+  uploadJsonBackupToDrive,
   uploadReceiptToDrive,
   WorkspaceAuthError,
 } from './services/googleWorkspace';
 import {
   EXPENSE_CATEGORIES,
+  INCOME_CATEGORIES,
   type AuditLog,
+  type BackupRecord,
   type BudgetLimit,
   type DriveAttachment,
   type FinancialAccount,
+  type SavingsContribution,
+  type SavingsGoal,
   type Transaction,
   type TransactionKind,
   type UserProfile,
 } from './types/finance';
 import {
   computeTransactionReminders,
+  detectDuplicateTransactions,
   evaluateBudget,
   formatVND,
+  type GlobalSearchResultItem,
 } from './utils/financeRules';
 import {
   isEditableTarget,
   resolveKeyboardShortcut,
   type ModalLayerState,
 } from './utils/keyboardShortcuts';
+import { exportFinanceWorkbook } from './utils/excelExport';
 import type { SingleSheetParseResult } from './utils/excelTemplate';
 
 function FinanceAppShell() {
@@ -79,15 +104,43 @@ function FinanceAppShell() {
   const [activePage, setActivePage] = useState<ActivePage>('overview');
   const [quickTxModalOpen, setQuickTxModalOpen] = useState(false);
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
+  const [categoryModalOpen, setCategoryModalOpen] = useState(false);
+  const [categoryModalSelected, setCategoryModalSelected] = useState<string | undefined>(
+    undefined
+  );
+  const categorySelectHandlerRef = useRef<((category: string) => void) | null>(null);
+  const [optimisticCategories, setOptimisticCategories] = useState<string[] | null>(null);
+  const [optimisticIncomeCategories, setOptimisticIncomeCategories] = useState<string[] | null>(
+    null
+  );
+  const [searchFocusSignal, setSearchFocusSignal] = useState(0);
+  const [txSearchHint, setTxSearchHint] = useState<string | undefined>(undefined);
+  const [isOffline, setIsOffline] = useState<boolean>(() =>
+    typeof navigator !== 'undefined' ? !navigator.onLine : false
+  );
 
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [accounts, setAccounts] = useState<FinancialAccount[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [budgets, setBudgets] = useState<BudgetLimit[]>([]);
+  const [savingsGoals, setSavingsGoals] = useState<SavingsGoal[]>([]);
+  const [savingsContributions, setSavingsContributions] = useState<SavingsContribution[]>([]);
+  const [backupHistory, setBackupHistory] = useState<BackupRecord[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [accountsLoaded, setAccountsLoaded] = useState(false);
   const [transactionsLoaded, setTransactionsLoaded] = useState(false);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+
+  useEffect(() => {
+    const handleOnline = () => setIsOffline(false);
+    const handleOffline = () => setIsOffline(true);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
   const dismissToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
@@ -134,6 +187,9 @@ function FinanceAppShell() {
       setAccounts([]);
       setTransactions([]);
       setBudgets([]);
+      setSavingsGoals([]);
+      setSavingsContributions([]);
+      setBackupHistory([]);
       setAuditLogs([]);
       setAccountsLoaded(false);
       setTransactionsLoaded(false);
@@ -144,7 +200,11 @@ function FinanceAppShell() {
       console.error('Failed to ensure user profile:', err);
     });
 
-    const unsubProfile = subscribeUserProfile(user.uid, setProfile);
+    const unsubProfile = subscribeUserProfile(user.uid, (nextProfile) => {
+      setProfile(nextProfile);
+      setOptimisticCategories(null);
+      setOptimisticIncomeCategories(null);
+    });
     const unsubAccounts = subscribeAccounts(user.uid, (rows) => {
       setAccounts(rows);
       setAccountsLoaded(true);
@@ -154,6 +214,12 @@ function FinanceAppShell() {
       setTransactionsLoaded(true);
     });
     const unsubBudgets = subscribeBudgets(user.uid, setBudgets);
+    const unsubSavingsGoals = subscribeSavingsGoals(user.uid, setSavingsGoals);
+    const unsubSavingsContribs = subscribeSavingsContributions(
+      user.uid,
+      setSavingsContributions
+    );
+    const unsubBackupHistory = subscribeBackupHistory(user.uid, setBackupHistory);
     const unsubLogs = subscribeAuditLogs(user.uid, setAuditLogs);
 
     return () => {
@@ -161,9 +227,15 @@ function FinanceAppShell() {
       unsubAccounts();
       unsubTransactions();
       unsubBudgets();
+      unsubSavingsGoals();
+      unsubSavingsContribs();
+      unsubBackupHistory();
       unsubLogs();
     };
   }, [user]);
+
+  const reminderLeadDays = profile?.reminderLeadDays ?? 3;
+  const defaultPageSize = profile?.defaultPageSize ?? 15;
 
   const handleTogglePush = useCallback(async () => {
     if (typeof window === 'undefined' || !('Notification' in window)) {
@@ -188,7 +260,7 @@ function FinanceAppShell() {
     if (typeof window === 'undefined' || !('Notification' in window)) return;
 
     const todayIso = new Date().toISOString().slice(0, 10);
-    const reminders = computeTransactionReminders(transactions, todayIso, 3);
+    const reminders = computeTransactionReminders(transactions, todayIso, reminderLeadDays);
     for (const rem of reminders) {
       const key = `rem:${rem.transaction.id}:${rem.severity}`;
       if (!sentNotificationsRef.current.has(key)) {
@@ -210,7 +282,7 @@ function FinanceAppShell() {
         });
       }
     }
-  }, [user, pushEnabled, pushPermission, transactions, budgets]);
+  }, [user, pushEnabled, pushPermission, transactions, budgets, reminderLeadDays]);
 
   const handleSignIn = async () => {
     setIsSigningIn(true);
@@ -492,9 +564,10 @@ function FinanceAppShell() {
   );
 
   const handleImportSingleSheetExcel = useCallback(
-    async (parsed: SingleSheetParseResult) => {
+    async (parsed: SingleSheetParseResult, options?: { skipDuplicates?: boolean }) => {
       if (!user) throw new Error('Chưa đăng nhập.');
       const actorEmail = user.email || user.uid;
+      const skipDuplicates = options?.skipDuplicates ?? true;
 
       const accountMap = new Map<string, FinancialAccount>();
       for (const acc of accounts) {
@@ -558,8 +631,20 @@ function FinanceAppShell() {
         return created;
       };
 
+      const dupResult = skipDuplicates
+        ? detectDuplicateTransactions(
+            [...parsed.incomes, ...parsed.expenses, ...parsed.transfers],
+            transactions
+          )
+        : { duplicateRowNumbers: new Set<number>(), reasonByRow: new Map<number, string>() };
+
+      let skippedDuplicates = 0;
       let incomesCreated = 0;
       for (const row of parsed.incomes) {
+        if (skipDuplicates && dupResult.duplicateRowNumbers.has(row.rowNumber)) {
+          skippedDuplicates++;
+          continue;
+        }
         const targetAcc = await resolveAccount(row.accountName);
         await reserveAndCreateTransaction(user.uid, actorEmail, {
           kind: 'income',
@@ -585,6 +670,10 @@ function FinanceAppShell() {
 
       let expensesCreated = 0;
       for (const row of parsed.expenses) {
+        if (skipDuplicates && dupResult.duplicateRowNumbers.has(row.rowNumber)) {
+          skippedDuplicates++;
+          continue;
+        }
         const targetAcc = await resolveAccount(row.accountName);
         await reserveAndCreateTransaction(user.uid, actorEmail, {
           kind: 'expense',
@@ -609,9 +698,60 @@ function FinanceAppShell() {
         expensesCreated++;
       }
 
-      return { accountsCreated, budgetsCreated, incomesCreated, expensesCreated };
+      let transfersCreated = 0;
+      for (const row of parsed.transfers) {
+        if (skipDuplicates && dupResult.duplicateRowNumbers.has(row.rowNumber)) {
+          skippedDuplicates++;
+          continue;
+        }
+        const sourceAcc = await resolveAccount(row.accountName);
+        const destAcc = await resolveAccount(row.toAccountName || '');
+        if (sourceAcc.id === destAcc.id) {
+          continue;
+        }
+        await reserveAndCreateTransaction(user.uid, actorEmail, {
+          kind: 'transfer',
+          name: row.name,
+          amount: row.amount,
+          actualAmount: row.actualAmount,
+          category: row.category,
+          method: row.method,
+          accountId: sourceAcc.id,
+          accountName: sourceAcc.name,
+          toAccountId: destAcc.id,
+          toAccountName: destAcc.name,
+          description: row.description,
+          expectedDate: row.expectedDate,
+          actualDate: row.actualDate,
+          status: row.status,
+          isArchived: false,
+          attachments: [],
+          dateForCode: row.actualDate || row.expectedDate,
+        });
+        transfersCreated++;
+      }
+
+      const totalImported =
+        accountsCreated + budgetsCreated + incomesCreated + expensesCreated + transfersCreated;
+      await recordBackupHistory(user.uid, {
+        type: 'excel_import',
+        recordCount: totalImported,
+        fileName: 'Mau_Nhap_Lieu_Excel.xlsx',
+        note: `Thu: ${incomesCreated}, Chi: ${expensesCreated}, Chuyển khoản: ${transfersCreated}, TK: ${accountsCreated}, Hạn mức: ${budgetsCreated}${
+          skippedDuplicates > 0 ? ` (bỏ qua ${skippedDuplicates} trùng lặp)` : ''
+        }`,
+      });
+
+      return {
+        accountsCreated,
+        budgetsCreated,
+        incomesCreated,
+        expensesCreated,
+        transfersCreated,
+        skippedDuplicates,
+      };
     },
-    [user, accounts]
+    [user, accounts, transactions]
   );
 
   const handleReconcileAccount = useCallback(
@@ -754,55 +894,224 @@ function FinanceAppShell() {
   const handleExportBackup = useCallback(async () => {
     if (!user) return;
     const data = await exportFullBackupData(user.uid);
+    const fileName = `SoQuy_Backup_${new Date().toISOString().slice(0, 10)}.json`;
     const blob = new Blob([JSON.stringify(data, null, 2)], {
       type: 'application/json',
     });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `SoQuy_Backup_${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = fileName;
     a.click();
     URL.revokeObjectURL(url);
+    const totalRecords =
+      data.accounts.length +
+      data.transactions.length +
+      data.budgets.length +
+      data.savingsGoals.length +
+      data.savingsContributions.length;
+    await recordBackupHistory(user.uid, {
+      type: 'manual_export',
+      recordCount: totalRecords,
+      fileName,
+      note: 'Tải xuống bản sao lưu JSON toàn hệ thống',
+    });
     addToast('success', 'Đã xuất tệp sao lưu JSON');
   }, [user, addToast]);
 
+  const handleDriveJsonBackup = useCallback(async () => {
+    if (!user) throw new Error('Chưa đăng nhập.');
+    try {
+      const token = requireWorkspaceToken();
+      const data = await exportFullBackupData(user.uid);
+      const fileName = `SoQuy_DriveBackup_${new Date().toISOString().slice(0, 10)}.json`;
+      const jsonContent = JSON.stringify(data, null, 2);
+      const uploaded = await uploadJsonBackupToDrive({
+        accessToken: token,
+        jsonContent,
+        fileName,
+        cachedRootFolderId: profile?.driveRootFolderId,
+      });
+      const nowIso = new Date().toISOString();
+      await updateUserWorkspaceMeta(user.uid, {
+        driveRootFolderId: uploaded.rootFolderId,
+        lastDriveBackupAt: nowIso,
+        lastDriveBackupFileId: uploaded.fileId,
+      });
+      const totalRecords =
+        data.accounts.length +
+        data.transactions.length +
+        data.budgets.length +
+        data.savingsGoals.length +
+        data.savingsContributions.length;
+      await recordBackupHistory(user.uid, {
+        type: 'drive_backup',
+        recordCount: totalRecords,
+        fileName,
+        driveFileId: uploaded.fileId,
+        driveWebViewLink: uploaded.webViewLink,
+        note: 'Đồng bộ bản sao lưu JSON lên Google Drive (thư mục Backups)',
+      });
+      addToast('success', 'Đã sao lưu JSON lên Google Drive', fileName);
+    } catch (err) {
+      handleWorkspaceError(err);
+    }
+  }, [user, profile?.driveRootFolderId, requireWorkspaceToken, handleWorkspaceError, addToast]);
+
   const handleImportBackup = useCallback(
-    async (file: File) => {
+    async (
+      file: File,
+      options?: { createPreRestoreSnapshot?: boolean; skipDuplicateTransactions?: boolean }
+    ) => {
       if (!user) throw new Error('Chưa đăng nhập.');
       const text = await file.text();
       const parsed = JSON.parse(text);
       if (!parsed || typeof parsed !== 'object') {
         throw new Error('Tệp sao lưu JSON không hợp lệ.');
       }
-      const res = await restoreBackupData(user.uid, user.email || user.uid, parsed);
-      addToast('success', `Đã khôi phục ${res.restoredCount} bản ghi`);
-      return res;
+      const res = await restoreBackupData(user.uid, user.email || user.uid, parsed, {
+        createPreRestoreSnapshot:
+          options?.createPreRestoreSnapshot ?? profile?.autoPreRestoreBackup ?? true,
+        skipDuplicateTransactions: options?.skipDuplicateTransactions ?? true,
+        sourceFileName: file.name,
+      });
+      addToast(
+        'success',
+        `Đã khôi phục ${res.restoredCount} bản ghi`,
+        res.skippedDuplicates ? `Đã bỏ qua ${res.skippedDuplicates} giao dịch trùng` : undefined
+      );
+      return {
+        restoredCount: res.restoredCount,
+        skippedDuplicates: res.skippedDuplicates,
+      };
+    },
+    [user, profile?.autoPreRestoreBackup, addToast]
+  );
+
+  const handleRestoreFromArchive = useCallback(
+    async (tx: Transaction) => {
+      if (!user) return;
+      await restoreTransactionFromArchive(user.uid, user.email || user.uid, tx);
+      addToast(
+        'success',
+        `Đã khôi phục ${tx.code} về sổ giao dịch`,
+        'Bản ghi gốc được mở khóa đồng bộ, không tạo bản sao'
+      );
     },
     [user, addToast]
   );
 
   const expenseCategories = useMemo(
     () =>
-      profile?.expenseCategories && profile.expenseCategories.length > 0
+      optimisticCategories && optimisticCategories.length > 0
+        ? optimisticCategories
+        : profile?.expenseCategories && profile.expenseCategories.length > 0
         ? profile.expenseCategories
         : [...EXPENSE_CATEGORIES],
-    [profile?.expenseCategories]
+    [optimisticCategories, profile?.expenseCategories]
+  );
+
+  const incomeCategories = useMemo(
+    () =>
+      optimisticIncomeCategories && optimisticIncomeCategories.length > 0
+        ? optimisticIncomeCategories
+        : profile?.incomeCategories && profile.incomeCategories.length > 0
+        ? profile.incomeCategories
+        : [...INCOME_CATEGORIES],
+    [optimisticIncomeCategories, profile?.incomeCategories]
   );
 
   const handleUpdateExpenseCategories = useCallback(
     async (nextCategories: string[]) => {
       if (!user) return;
-      await updateUserWorkspaceMeta(user.uid, {
-        expenseCategories: nextCategories,
-      });
+      setOptimisticCategories(nextCategories);
+      try {
+        await updateUserWorkspaceMeta(user.uid, {
+          expenseCategories: nextCategories,
+        });
+        await writeAuditLog(
+          user.uid,
+          user.email || user.uid,
+          'settings',
+          'DANH MỤC CHI',
+          'Cập nhật danh mục chi tiêu',
+          `Tổng ${nextCategories.length} danh mục chi`
+        );
+      } catch (err) {
+        setOptimisticCategories(null);
+        throw err;
+      }
     },
     [user]
   );
 
+  const handleUpdateIncomeCategories = useCallback(
+    async (nextCategories: string[]) => {
+      if (!user) return;
+      setOptimisticIncomeCategories(nextCategories);
+      try {
+        await updateUserWorkspaceMeta(user.uid, {
+          incomeCategories: nextCategories,
+        });
+        await writeAuditLog(
+          user.uid,
+          user.email || user.uid,
+          'settings',
+          'DANH MỤC THU',
+          'Cập nhật danh mục thu nhập',
+          `Tổng ${nextCategories.length} danh mục thu`
+        );
+      } catch (err) {
+        setOptimisticIncomeCategories(null);
+        throw err;
+      }
+    },
+    [user]
+  );
+
+  const handleUpdatePreferences = useCallback(
+    async (patch: {
+      reminderLeadDays?: number;
+      defaultPageSize?: number;
+      autoPreRestoreBackup?: boolean;
+    }) => {
+      if (!user) return;
+      await updateUserWorkspaceMeta(user.uid, patch);
+      await writeAuditLog(
+        user.uid,
+        user.email || user.uid,
+        'settings',
+        'CẤU HÌNH',
+        'Cập nhật tùy chọn hệ thống',
+        `Nhắc trước: ${patch.reminderLeadDays ?? profile?.reminderLeadDays ?? 3} ngày | Phân trang: ${patch.defaultPageSize ?? profile?.defaultPageSize ?? 15} dòng`
+      );
+      addToast('success', 'Đã lưu cấu hình hệ thống');
+    },
+    [user, profile?.reminderLeadDays, profile?.defaultPageSize, addToast]
+  );
+
+  const handleOpenCategoryManager = useCallback(
+    (currentCategory: string, onSelect: (category: string) => void) => {
+      setCategoryModalSelected(currentCategory);
+      categorySelectHandlerRef.current = onSelect;
+      setCategoryModalOpen(true);
+    },
+    []
+  );
+
+  const handleSelectGlobalSearchResult = useCallback((item: GlobalSearchResultItem) => {
+    setActivePage(item.targetPage);
+    if (item.targetPage === 'transactions' && item.searchHint) {
+      setTxSearchHint(item.searchHint);
+    }
+  }, []);
+
   useEffect(() => {
     if (!authReady || !user) return;
 
-    const modalState: ModalLayerState = quickTxModalOpen
+    const modalState: ModalLayerState = categoryModalOpen
+      ? 'expense_categories'
+      : quickTxModalOpen
       ? 'quick_transaction'
       : shortcutsHelpOpen
       ? 'shortcuts_help'
@@ -830,12 +1139,17 @@ function FinanceAppShell() {
         e.preventDefault();
         setShortcutsHelpOpen(false);
         setQuickTxModalOpen(true);
+      } else if (action.type === 'focus_global_search') {
+        e.preventDefault();
+        setSearchFocusSignal((v) => v + 1);
       } else if (action.type === 'toggle_shortcuts_help') {
         e.preventDefault();
         setShortcutsHelpOpen((prev) => !prev);
       } else if (action.type === 'close_modal') {
         e.preventDefault();
-        if (quickTxModalOpen) {
+        if (categoryModalOpen) {
+          setCategoryModalOpen(false);
+        } else if (quickTxModalOpen) {
           setQuickTxModalOpen(false);
         } else if (shortcutsHelpOpen) {
           setShortcutsHelpOpen(false);
@@ -845,7 +1159,7 @@ function FinanceAppShell() {
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [authReady, user, quickTxModalOpen, shortcutsHelpOpen]);
+  }, [authReady, user, categoryModalOpen, quickTxModalOpen, shortcutsHelpOpen]);
 
   if (!authReady) {
     return (
@@ -879,7 +1193,19 @@ function FinanceAppShell() {
     <>
       <SidebarLayout
         activePage={activePage}
-        onNavigate={setActivePage}
+        onNavigate={(page) => {
+          setActivePage(page);
+          if (page !== 'transactions') {
+            setTxSearchHint(undefined);
+          }
+        }}
+        onSelectSearchResult={handleSelectGlobalSearchResult}
+        searchFocusSignal={searchFocusSignal}
+        transactions={transactions}
+        accounts={accounts}
+        budgets={budgets}
+        savingsGoals={savingsGoals}
+        isOffline={isOffline}
         onOpenQuickTransaction={() => {
           setShortcutsHelpOpen(false);
           setQuickTxModalOpen(true);
@@ -900,7 +1226,10 @@ function FinanceAppShell() {
                 accounts={accounts}
                 transactions={transactions}
                 budgets={budgets}
+                savingsGoals={savingsGoals}
                 expenseCategories={expenseCategories}
+                incomeCategories={incomeCategories}
+                reminderLeadDays={reminderLeadDays}
                 spreadsheetId={profile?.spreadsheetId}
                 hasWorkspaceToken={Boolean(accessToken)}
                 userEmail={user.email || undefined}
@@ -909,6 +1238,7 @@ function FinanceAppShell() {
                 onTogglePush={handleTogglePush}
                 onSyncGoogleSheet={handleSyncGoogleSheet}
                 onReconnectDrive={handleReconnectDrive}
+                onNavigate={setActivePage}
               />
             )}
 
@@ -918,45 +1248,129 @@ function FinanceAppShell() {
                 transactions={transactions}
                 budgets={budgets}
                 expenseCategories={expenseCategories}
-                onUpdateExpenseCategories={handleUpdateExpenseCategories}
+                incomeCategories={incomeCategories}
+                defaultPageSize={defaultPageSize}
+                externalSearchQuery={txSearchHint}
+                onOpenCategoryManager={handleOpenCategoryManager}
                 hasDriveToken={Boolean(accessToken)}
                 userEmail={user.email || undefined}
                 pushPermission={pushPermission}
                 pushEnabled={pushEnabled}
                 onTogglePush={handleTogglePush}
                 onReconnectDrive={handleReconnectDrive}
+                onNavigate={setActivePage}
                 onPeekCode={handlePeekCode}
                 onSaveNewTransaction={handleSaveNewTransaction}
                 onUpdateTransaction={handleUpdateTransaction}
+                onCreateCalendarReminder={handleCreateCalendarReminder}
+                onCreateTaskItem={handleCreateTaskItem}
+                onImportSingleSheetExcel={async (parsed, options) => {
+                  const stats = await handleImportSingleSheetExcel(parsed, options);
+                  addToast(
+                    'success',
+                    'Đã nhập dữ liệu Excel thành công',
+                    `${stats.incomesCreated} thu · ${stats.expensesCreated} chi · ${stats.transfersCreated} chuyển khoản · ${stats.budgetsCreated} hạn mức`
+                  );
+                  return stats;
+                }}
+              />
+            )}
+
+            {activePage === 'accounts' && (
+              <AccountsPage
+                accounts={accounts}
+                transactions={transactions}
+                hasDriveToken={Boolean(accessToken)}
+                defaultPageSize={defaultPageSize}
+                onReconnectDrive={handleReconnectDrive}
                 onCreateAccount={async (input) => {
-                  const res = await createAccount(user.uid, actorEmail, input);
-                  addToast('success', 'Đã thêm nguồn tiền mới', input.name);
-                  return res;
+                  await createAccount(user.uid, actorEmail, input);
+                  addToast('success', 'Đã thêm tài khoản mới', input.name);
                 }}
                 onUpdateAccount={async (id, patch) => {
                   await updateAccount(user.uid, actorEmail, id, patch);
                   addToast('success', 'Đã cập nhật tài khoản', patch.name);
                 }}
                 onReconcileAccount={handleReconcileAccount}
+              />
+            )}
+
+            {activePage === 'budgets' && (
+              <BudgetsPage
+                budgets={budgets}
+                transactions={transactions}
+                expenseCategories={expenseCategories}
                 onCreateBudget={async (input) => {
                   await createBudgetLimit(user.uid, actorEmail, input);
                   addToast('success', 'Đã tạo hạn mức chi tiêu', input.name);
+                }}
+                onUpdateBudget={async (id, patch) => {
+                  await updateBudgetLimit(user.uid, actorEmail, id, patch);
+                  addToast('success', 'Đã cập nhật hạn mức chi tiêu', patch.name);
                 }}
                 onDeleteBudget={async (b) => {
                   await deleteBudgetLimit(user.uid, actorEmail, b);
                   addToast('info', 'Đã xóa hạn mức chi tiêu', b.name);
                 }}
-                onCreateCalendarReminder={handleCreateCalendarReminder}
-                onCreateTaskItem={handleCreateTaskItem}
-                onImportSingleSheetExcel={async (parsed) => {
-                  const stats = await handleImportSingleSheetExcel(parsed);
+              />
+            )}
+
+            {activePage === 'savings' && (
+              <SavingsPage
+                goals={savingsGoals}
+                contributions={savingsContributions}
+                accounts={accounts}
+                defaultPageSize={defaultPageSize}
+                onCreateGoal={async (input) => {
+                  await createSavingsGoal(user.uid, actorEmail, input);
+                  addToast('success', 'Đã tạo mục tiêu tiết kiệm', input.name);
+                }}
+                onUpdateGoal={async (goalId, patch) => {
+                  await updateSavingsGoal(user.uid, actorEmail, goalId, patch);
+                  addToast('success', 'Đã cập nhật mục tiêu tiết kiệm', patch.name);
+                }}
+                onDeleteGoal={async (goal) => {
+                  await deleteSavingsGoal(user.uid, actorEmail, goal);
+                  addToast('info', 'Đã xóa mục tiêu tiết kiệm', goal.name);
+                }}
+                onRecordContribution={async (input) => {
+                  await recordSavingsContribution(user.uid, actorEmail, input);
                   addToast(
                     'success',
-                    'Đã nhập dữ liệu Excel thành công',
-                    `${stats.incomesCreated} thu · ${stats.expensesCreated} chi · ${stats.budgetsCreated} hạn mức`
+                    input.type === 'deposit'
+                      ? 'Đã ghi nhận gửi tiết kiệm'
+                      : 'Đã rút tiền từ mục tiêu',
+                    formatVND(input.amount)
                   );
-                  return stats;
                 }}
+              />
+            )}
+
+            {activePage === 'reports' && (
+              <ReportsPage
+                transactions={transactions}
+                accounts={accounts}
+                savingsGoals={savingsGoals}
+                userEmail={user.email || undefined}
+                onExportExcel={(year) => {
+                  exportFinanceWorkbook({
+                    transactions,
+                    accounts,
+                    budgets,
+                    savingsGoals,
+                    selectedYear: year,
+                  });
+                  addToast('success', `Đã xuất báo cáo Excel năm ${year}`);
+                }}
+                onSyncGoogleSheet={async () => {
+                  await handleSyncGoogleSheet();
+                }}
+                hasDriveToken={Boolean(accessToken)}
+                spreadsheetUrl={
+                  profile?.spreadsheetId
+                    ? `https://docs.google.com/spreadsheets/d/${profile.spreadsheetId}`
+                    : undefined
+                }
               />
             )}
 
@@ -966,9 +1380,36 @@ function FinanceAppShell() {
                 auditLogs={auditLogs}
                 expenseCategories={expenseCategories}
                 hasDriveToken={Boolean(accessToken)}
+                defaultPageSize={defaultPageSize}
+                onRestoreFromArchive={handleRestoreFromArchive}
                 onDeleteConfirmed={handleDeleteConfirmed}
                 onExportBackup={handleExportBackup}
                 onImportBackup={handleImportBackup}
+              />
+            )}
+
+            {activePage === 'settings' && (
+              <SettingsPage
+                userEmail={actorEmail}
+                userName={user.displayName || actorEmail}
+                userUid={user.uid}
+                profile={profile}
+                expenseCategories={expenseCategories}
+                incomeCategories={incomeCategories}
+                backupHistory={backupHistory}
+                hasDriveToken={Boolean(accessToken)}
+                onOpenExpenseCategoryModal={() => {
+                  setCategoryModalSelected(expenseCategories[0]);
+                  categorySelectHandlerRef.current = null;
+                  setCategoryModalOpen(true);
+                }}
+                onUpdateIncomeCategories={handleUpdateIncomeCategories}
+                onUpdatePreferences={handleUpdatePreferences}
+                onExportBackup={handleExportBackup}
+                onImportBackup={handleImportBackup}
+                onDriveBackup={handleDriveJsonBackup}
+                onReconnectDrive={handleReconnectDrive}
+                onSyncGoogleSheet={handleSyncGoogleSheet}
               />
             )}
           </>
@@ -980,10 +1421,24 @@ function FinanceAppShell() {
         onClose={() => setQuickTxModalOpen(false)}
         accounts={accounts}
         expenseCategories={expenseCategories}
+        incomeCategories={incomeCategories}
+        onOpenCategoryManager={handleOpenCategoryManager}
         hasDriveToken={Boolean(accessToken)}
         onReconnectDrive={handleReconnectDrive}
         onPeekCode={handlePeekCode}
         onSaveNewTransaction={handleSaveNewTransaction}
+      />
+
+      <ExpenseCategoriesModal
+        open={categoryModalOpen}
+        onClose={() => setCategoryModalOpen(false)}
+        expenseCategories={expenseCategories}
+        selectedCategory={categoryModalSelected}
+        onSelectCategory={(nextCat) => {
+          setCategoryModalSelected(nextCat);
+          categorySelectHandlerRef.current?.(nextCat);
+        }}
+        onUpdateExpenseCategories={handleUpdateExpenseCategories}
       />
 
       <KeyboardShortcutsModal
