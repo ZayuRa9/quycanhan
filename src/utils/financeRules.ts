@@ -285,7 +285,8 @@ export function validateTransactionStatusChange(
   attachments: DriveAttachment[],
   accountId: string | undefined,
   markArchived: boolean,
-  toAccountId?: string
+  toAccountId?: string,
+  requireProof = true
 ): ValidationResult {
   if (isTransactionCancelled(nextStatus)) {
     return { valid: true };
@@ -334,7 +335,7 @@ export function validateTransactionStatusChange(
           error: 'Vui lòng nhập ngày thực tế nhận tiền.',
         };
       }
-      if (attachments.length === 0) {
+      if (requireProof && attachments.length === 0) {
         return {
           valid: false,
           error:
@@ -351,7 +352,7 @@ export function validateTransactionStatusChange(
             'Khi đánh dấu đã thực hiện hoặc hoàn thành, bắt buộc phải nhập ngày chính thức chi tiền.',
         };
       }
-      if (attachments.length === 0) {
+      if (requireProof && attachments.length === 0) {
         return {
           valid: false,
           error:
@@ -1719,3 +1720,39 @@ export function searchGlobalEntities(params: {
 
   return results.slice(0, limit);
 }
+
+export function formatFirebaseAuthError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err || '');
+  const lower = raw.toLowerCase();
+
+  if (
+    lower.includes('popup-closed-by-user') ||
+    lower.includes('cancelled-popup-request')
+  ) {
+    return 'Cửa sổ đăng nhập Google đã được đóng trước khi hoàn tất. Vui lòng thử lại.';
+  }
+  if (lower.includes('popup-blocked')) {
+    return 'Trình duyệt đang chặn cửa sổ bật lên (Popup). Vui lòng cho phép Popup cho trang web này rồi thử lại.';
+  }
+  if (lower.includes('unauthorized-domain')) {
+    return 'Tên miền hiện tại chưa được cấp phép trong Firebase Authentication (Authorized domains).';
+  }
+  if (lower.includes('user-mismatch')) {
+    return 'Vui lòng chọn đúng tài khoản Google đang đăng nhập để kết nối Google Workspace.';
+  }
+  if (lower.includes('network-request-failed')) {
+    return 'Lỗi kết nối mạng khi xác thực Google. Vui lòng kiểm tra Internet và thử lại.';
+  }
+  if (
+    lower.includes('access_denied') ||
+    lower.includes('testing') ||
+    lower.includes('kiểm thử') ||
+    lower.includes('xác minh') ||
+    lower.includes('org_internal')
+  ) {
+    return 'Màn hình đồng ý OAuth trên Google Cloud Console của dự án vẫn đang ở chế độ Thử nghiệm (Testing). Chủ dự án cần vào Google Cloud Console → Google Auth Platform → Audience và nhấn "Publish App" (Xuất bản ứng dụng) để mọi người dùng đều đăng nhập được.';
+  }
+
+  return raw || 'Đăng nhập Google thất bại. Vui lòng thử lại.';
+}
+

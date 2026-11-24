@@ -19,6 +19,7 @@ import { ToastContainer, type ToastItem, type ToastVariant } from './components/
 import type { QueuedUploadFile } from './components/DriveUploader';
 import {
   clearAccessToken,
+  connectGoogleWorkspace,
   getAccessToken,
   googleSignIn,
   initAuth,
@@ -83,6 +84,7 @@ import {
   computeTransactionReminders,
   detectDuplicateTransactions,
   evaluateBudget,
+  formatFirebaseAuthError,
   formatVND,
   type GlobalSearchResultItem,
 } from './utils/financeRules';
@@ -288,15 +290,11 @@ function FinanceAppShell() {
     setIsSigningIn(true);
     setAuthError(null);
     try {
-      const result = await googleSignIn(false);
+      const result = await googleSignIn();
       setUser(result.user);
       setAccessToken(result.accessToken);
     } catch (err) {
-      setAuthError(
-        err instanceof Error
-          ? err.message
-          : 'Đăng nhập Google thất bại. Vui lòng thử lại.'
-      );
+      setAuthError(formatFirebaseAuthError(err));
     } finally {
       setIsSigningIn(false);
     }
@@ -306,11 +304,17 @@ function FinanceAppShell() {
     setIsSigningIn(true);
     setAuthError(null);
     try {
-      const result = await googleSignIn(true);
+      const result = await connectGoogleWorkspace(true);
       setUser(result.user);
       setAccessToken(result.accessToken);
+      addToast(
+        'success',
+        'Đã kết nối Google Workspace',
+        'Sẵn sàng tải chứng từ Drive, đồng bộ Sheets & lịch nhắc'
+      );
     } catch (err) {
       console.error('Reconnect Drive error:', err);
+      addToast('error', 'Chưa kết nối được Google Drive', formatFirebaseAuthError(err));
     } finally {
       setIsSigningIn(false);
     }

@@ -188,7 +188,9 @@ export const DriveUploader: React.FC<DriveUploaderProps> = ({
 
       {attachments.length === 0 && queuedFiles.length === 0 ? (
         <p className="text-xs text-slate-500">
-          Chưa có chứng từ. Bạn có thể chọn hình ảnh/hóa đơn và đổi tên theo yêu cầu trước khi tải lên Google Drive (kiểm tra trùng lặp SHA-256).
+          {hasDriveToken
+            ? 'Chưa có chứng từ. Bạn có thể chọn hình ảnh/hóa đơn và đổi tên theo yêu cầu trước khi tải lên Google Drive (kiểm tra trùng lặp SHA-256).'
+            : 'Chưa kết nối Google Drive (tùy chọn). Sổ quỹ vẫn hoạt động đầy đủ; nếu cần đính kèm hóa đơn lên Drive cá nhân, hãy nhấn "Kết nối Google Drive" ở trên.'}
         </p>
       ) : attachments.length > 0 ? (
         <ul className="divide-y divide-slate-200 border border-slate-200 rounded-xl bg-white overflow-hidden">

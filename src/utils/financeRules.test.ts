@@ -21,6 +21,7 @@ import {
   evaluateSavingsGoal,
   filterTransactionsByQuery,
   formatDateVN,
+  formatFirebaseAuthError,
   formatVND,
   getDriveFolderParts,
   mergeExpenseCategories,
@@ -1352,6 +1353,75 @@ test('buildPdfDocumentFromJpegPages outputs valid multi-page PDF 1.4 binary', ()
   assert.ok(text.includes('/Count 2'));
   assert.ok(text.includes('%%EOF'));
 });
+
+test('validateTransactionStatusChange allows realization/archive without attachments when requireProof=false', () => {
+  const withoutDriveExp = validateTransactionStatusChange(
+    'expense',
+    'Đã thực hiện',
+    '2026-11-23',
+    [],
+    'acc-1',
+    true,
+    undefined,
+    false
+  );
+  assert.equal(withoutDriveExp.valid, true);
+
+  const withoutDriveInc = validateTransactionStatusChange(
+    'income',
+    'Đã thực hiện',
+    '2026-11-23',
+    [],
+    'acc-1',
+    true,
+    undefined,
+    false
+  );
+  assert.equal(withoutDriveInc.valid, true);
+
+  // Still requires actualDate and accountId even when requireProof=false
+  const missingDate = validateTransactionStatusChange(
+    'expense',
+    'Đã thực hiện',
+    '',
+    [],
+    'acc-1',
+    true,
+    undefined,
+    false
+  );
+  assert.equal(missingDate.valid, false);
+
+  const missingAccount = validateTransactionStatusChange(
+    'income',
+    'Đã thực hiện',
+    '2026-11-23',
+    [],
+    '',
+    true,
+    undefined,
+    false
+  );
+  assert.equal(missingAccount.valid, false);
+});
+
+test('formatFirebaseAuthError translates common OAuth and testing-mode errors into Vietnamese guidance', () => {
+  assert.ok(
+    formatFirebaseAuthError(new Error('Firebase: Error (auth/popup-closed-by-user).')).includes('đã được đóng')
+  );
+  assert.ok(
+    formatFirebaseAuthError(new Error('Firebase: Error (auth/popup-blocked).')).includes('Popup')
+  );
+  assert.ok(
+    formatFirebaseAuthError(new Error('Firebase: Error (auth/unauthorized-domain).')).includes('Authorized domains')
+  );
+  const testingMsg = formatFirebaseAuthError(
+    new Error('access_denied: app has not completed Google verification (testing mode)')
+  );
+  assert.ok(testingMsg.includes('Publish App'));
+  assert.ok(testingMsg.includes('Google Cloud Console'));
+});
+
 
 
 

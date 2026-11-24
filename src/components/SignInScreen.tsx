@@ -68,7 +68,7 @@ export const SignInScreen: React.FC<SignInScreenProps> = ({
               Đăng nhập tài khoản
             </h2>
             <p className="text-sm text-slate-500 leading-relaxed">
-              Sử dụng tài khoản Google để mở sổ quỹ cá nhân và kết nối Google Drive, Google Sheets.
+              Sử dụng tài khoản Google để mở toàn bộ Sổ Quỹ Cá Nhân. Kết nối Google Drive và Google Sheets có thể bật thêm bất kỳ lúc nào bên trong ứng dụng.
             </p>
           </div>
 

@@ -842,7 +842,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                   <p className="text-xs text-slate-500">
                     {hasDriveToken
                       ? 'Phiên OAuth đang hoạt động (Drive · Sheets · Calendar · Tasks)'
-                      : 'Chưa cấp token phiên hiện tại hoặc đã hết hạn'}
+                      : 'Tùy chọn: kết nối khi muốn lưu chứng từ Drive hoặc đồng bộ Sheets'}
                   </p>
                 </div>
               </div>
@@ -850,10 +850,10 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                 className={`px-2.5 py-1 text-xs font-bold rounded-lg border whitespace-nowrap ${
                   hasDriveToken
                     ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                    : 'bg-amber-50 text-amber-800 border-amber-200'
+                    : 'bg-slate-100 text-slate-700 border-slate-200'
                 }`}
               >
-                {hasDriveToken ? 'Đã kết nối' : 'Cần kết nối lại'}
+                {hasDriveToken ? 'Đã kết nối' : 'Chưa kết nối'}
               </span>
             </div>
 

@@ -280,7 +280,8 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
       simulatedProofList,
       accountId,
       shouldArchive,
-      isTransfer ? toAccountId : undefined
+      isTransfer ? toAccountId : undefined,
+      hasDriveToken
     );
     if (!validation.valid) {
       setFormError(validation.error || 'Chưa đủ điều kiện cập nhật trạng thái.');
@@ -733,7 +734,9 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
                 <span>
                   {isTransfer
                     ? 'Chuyển vào Lưu trữ sau khi hoàn tất'
-                    : 'Chuyển vào Lưu trữ sau khi hoàn tất (cần chứng từ)'}
+                    : hasDriveToken
+                      ? 'Chuyển vào Lưu trữ sau khi hoàn tất (cần chứng từ)'
+                      : 'Chuyển vào Lưu trữ sau khi hoàn tất (chứng từ tùy chọn khi chưa nối Drive)'}
                 </span>
               </label>
             )}

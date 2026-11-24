@@ -651,7 +651,8 @@ export const TransactionsPage: React.FC<TransactionsPageProps> = ({
       simulatedProofList,
       accountId,
       shouldArchive,
-      isTransferTab ? toAccountId : undefined
+      isTransferTab ? toAccountId : undefined,
+      hasDriveToken
     );
     if (!validation.valid) {
       setFormError(validation.error || 'Chưa đủ điều kiện cập nhật trạng thái.');
@@ -665,7 +666,7 @@ export const TransactionsPage: React.FC<TransactionsPageProps> = ({
       return;
     }
 
-    if (totalProofCount === 0 && shouldArchive && !isTransferTab) {
+    if (hasDriveToken && totalProofCount === 0 && shouldArchive && !isTransferTab) {
       setFormError('Cần ít nhất 1 chứng từ trên Google Drive trước khi chuyển vào Lưu trữ.');
       return;
     }
@@ -778,7 +779,8 @@ export const TransactionsPage: React.FC<TransactionsPageProps> = ({
       tx.attachments,
       tx.accountId,
       true,
-      tx.toAccountId
+      tx.toAccountId,
+      hasDriveToken
     );
     if (!validation.valid) {
       startEditing(tx);

@@ -3,6 +3,7 @@ import {
   getAuth,
   GoogleAuthProvider,
   onAuthStateChanged,
+  reauthenticateWithPopup,
   signInWithPopup,
   signOut,
   type User,
@@ -20,11 +21,6 @@ export const WORKSPACE_SCOPES = [
   'https://www.googleapis.com/auth/calendar.events',
   'https://www.googleapis.com/auth/tasks',
 ] as const;
-
-const provider = new GoogleAuthProvider();
-for (const scope of WORKSPACE_SCOPES) {
-  provider.addScope(scope);
-}
 
 // Strictly in-memory OAuth token cache (never stored in localStorage/sessionStorage)
 let cachedAccessToken: string | null = null;
@@ -54,7 +50,30 @@ export function initAuth(
   });
 }
 
-export async function googleSignIn(forceConsent = false): Promise<{
+/**
+ * Basic Google Sign-In using ONLY standard non-sensitive identity scopes (openid, email, profile).
+ * Keeps login open to all public Google accounts without forcing Drive/Sheets/Calendar/Tasks verification upfront.
+ */
+export async function googleSignIn(): Promise<{
+  user: User;
+  accessToken: string | null;
+}> {
+  try {
+    isSigningIn = true;
+    const authProvider = new GoogleAuthProvider();
+    authProvider.setCustomParameters({ prompt: 'select_account' });
+    const result = await signInWithPopup(auth, authProvider);
+    return { user: result.user, accessToken: cachedAccessToken };
+  } finally {
+    isSigningIn = false;
+  }
+}
+
+/**
+ * Incremental authorization for optional Google Workspace integrations (Drive, Sheets, Calendar, Tasks).
+ * Invoked only when the user explicitly clicks "Kết nối Google Drive / Workspace".
+ */
+export async function connectGoogleWorkspace(forceConsent = true): Promise<{
   user: User;
   accessToken: string;
 }> {
@@ -64,13 +83,23 @@ export async function googleSignIn(forceConsent = false): Promise<{
     for (const scope of WORKSPACE_SCOPES) {
       authProvider.addScope(scope);
     }
+    const params: Record<string, string> = {};
     if (forceConsent) {
-      authProvider.setCustomParameters({ prompt: 'consent' });
+      params.prompt = 'consent';
     }
-    const result = await signInWithPopup(auth, authProvider);
+    if (auth.currentUser?.email) {
+      params.login_hint = auth.currentUser.email;
+    }
+    if (Object.keys(params).length > 0) {
+      authProvider.setCustomParameters(params);
+    }
+
+    const result = auth.currentUser
+      ? await reauthenticateWithPopup(auth.currentUser, authProvider)
+      : await signInWithPopup(auth, authProvider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
     if (!credential?.accessToken) {
-      throw new Error('Không lấy được mã truy cập Google Workspace từ phiên đăng nhập.');
+      throw new Error('Không lấy được mã truy cập Google Workspace từ phiên xác thực.');
     }
     cachedAccessToken = credential.accessToken;
     return { user: result.user, accessToken: cachedAccessToken };
