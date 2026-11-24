@@ -31,7 +31,6 @@ import {
   toVndInt,
   validateTransactionStatusChange,
 } from '../utils/financeRules';
-import { resolveKeyboardShortcut } from '../utils/keyboardShortcuts';
 import { DriveUploader, type QueuedUploadFile } from './DriveUploader';
 import { getStatusMeta } from './StatusText';
 
@@ -335,24 +334,6 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
     }
   };
 
-  const handleModalKeyDown = (e: React.KeyboardEvent) => {
-    const action = resolveKeyboardShortcut({
-      key: e.key,
-      code: e.code,
-      ctrlKey: e.ctrlKey,
-      metaKey: e.metaKey,
-      altKey: e.altKey,
-      shiftKey: e.shiftKey,
-      repeat: e.repeat,
-      isEditable: true,
-      modalState: 'quick_transaction',
-    });
-    if (action?.type === 'submit_modal') {
-      e.preventDefault();
-      formRef.current?.requestSubmit();
-    }
-  };
-
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs"
@@ -363,7 +344,6 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
         aria-modal="true"
         aria-labelledby="quick-tx-modal-title"
         onClick={(e) => e.stopPropagation()}
-        onKeyDown={handleModalKeyDown}
         className="w-full max-w-2xl bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
       >
         <div
@@ -390,7 +370,7 @@ export const QuickTransactionModal: React.FC<QuickTransactionModalProps> = ({
                 Tạo nhanh giao dịch ({previewCode})
               </h2>
               <p className="text-xs text-white/85">
-                Phím tắt: N để mở · Ctrl/⌘+Enter để lưu · Esc để đóng
+                Ghi nhận nhanh khoản thu, chi hoặc chuyển khoản nội bộ
               </p>
             </div>
           </div>

@@ -13,7 +13,6 @@ import { ArchivePage } from './components/ArchivePage';
 import { SettingsPage } from './components/SettingsPage';
 import { DashboardSkeleton } from './components/DashboardSkeleton';
 import { QuickTransactionModal } from './components/QuickTransactionModal';
-import { KeyboardShortcutsModal } from './components/KeyboardShortcutsModal';
 import { ExpenseCategoriesModal } from './components/ExpenseCategoriesModal';
 import { ToastContainer, type ToastItem, type ToastVariant } from './components/ToastContainer';
 import type { QueuedUploadFile } from './components/DriveUploader';
@@ -90,11 +89,6 @@ import {
   isPopupCancelledError,
   type GlobalSearchResultItem,
 } from './utils/financeRules';
-import {
-  isEditableTarget,
-  resolveKeyboardShortcut,
-  type ModalLayerState,
-} from './utils/keyboardShortcuts';
 import { exportFinanceWorkbook } from './utils/excelExport';
 import type { SingleSheetParseResult } from './utils/excelTemplate';
 
@@ -108,7 +102,6 @@ function FinanceAppShell() {
 
   const [activePage, setActivePage] = useState<ActivePage>('overview');
   const [quickTxModalOpen, setQuickTxModalOpen] = useState(false);
-  const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
   const [categoryModalOpen, setCategoryModalOpen] = useState(false);
   const [categoryModalSelected, setCategoryModalSelected] = useState<string | undefined>(
     undefined
@@ -118,7 +111,6 @@ function FinanceAppShell() {
   const [optimisticIncomeCategories, setOptimisticIncomeCategories] = useState<string[] | null>(
     null
   );
-  const [searchFocusSignal, setSearchFocusSignal] = useState(0);
   const [txSearchHint, setTxSearchHint] = useState<string | undefined>(undefined);
   const [isOffline, setIsOffline] = useState<boolean>(() =>
     typeof navigator !== 'undefined' ? !navigator.onLine : false
@@ -1173,61 +1165,6 @@ function FinanceAppShell() {
     }
   }, []);
 
-  useEffect(() => {
-    if (!authReady || !user) return;
-
-    const modalState: ModalLayerState = categoryModalOpen
-      ? 'expense_categories'
-      : quickTxModalOpen
-      ? 'quick_transaction'
-      : shortcutsHelpOpen
-      ? 'shortcuts_help'
-      : 'none';
-
-    const onKeyDown = (e: KeyboardEvent) => {
-      const action = resolveKeyboardShortcut({
-        key: e.key,
-        code: e.code,
-        ctrlKey: e.ctrlKey,
-        metaKey: e.metaKey,
-        altKey: e.altKey,
-        shiftKey: e.shiftKey,
-        repeat: e.repeat,
-        isEditable: isEditableTarget(e.target),
-        modalState,
-      });
-
-      if (!action) return;
-
-      if (action.type === 'navigate') {
-        e.preventDefault();
-        setActivePage(action.page);
-      } else if (action.type === 'open_quick_transaction') {
-        e.preventDefault();
-        setShortcutsHelpOpen(false);
-        setQuickTxModalOpen(true);
-      } else if (action.type === 'focus_global_search') {
-        e.preventDefault();
-        setSearchFocusSignal((v) => v + 1);
-      } else if (action.type === 'toggle_shortcuts_help') {
-        e.preventDefault();
-        setShortcutsHelpOpen((prev) => !prev);
-      } else if (action.type === 'close_modal') {
-        e.preventDefault();
-        if (categoryModalOpen) {
-          setCategoryModalOpen(false);
-        } else if (quickTxModalOpen) {
-          setQuickTxModalOpen(false);
-        } else if (shortcutsHelpOpen) {
-          setShortcutsHelpOpen(false);
-        }
-      }
-    };
-
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [authReady, user, categoryModalOpen, quickTxModalOpen, shortcutsHelpOpen]);
-
   if (!authReady) {
     return (
       <div className="min-h-screen bg-[#f4f7fe] flex items-center justify-center p-6">
@@ -1268,17 +1205,12 @@ function FinanceAppShell() {
           }
         }}
         onSelectSearchResult={handleSelectGlobalSearchResult}
-        searchFocusSignal={searchFocusSignal}
         transactions={transactions}
         accounts={accounts}
         budgets={budgets}
         savingsGoals={savingsGoals}
         isOffline={isOffline}
-        onOpenQuickTransaction={() => {
-          setShortcutsHelpOpen(false);
-          setQuickTxModalOpen(true);
-        }}
-        onOpenShortcutsHelp={() => setShortcutsHelpOpen((prev) => !prev)}
+        onOpenQuickTransaction={() => setQuickTxModalOpen(true)}
         userEmail={resolvedEmail || 'Tài khoản Google'}
         userName={user.displayName || resolvedEmail || 'Người dùng'}
         hasDriveToken={Boolean(accessToken)}
@@ -1541,11 +1473,6 @@ function FinanceAppShell() {
           categorySelectHandlerRef.current?.(nextCat);
         }}
         onUpdateExpenseCategories={handleUpdateExpenseCategories}
-      />
-
-      <KeyboardShortcutsModal
-        open={shortcutsHelpOpen}
-        onClose={() => setShortcutsHelpOpen(false)}
       />
 
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />

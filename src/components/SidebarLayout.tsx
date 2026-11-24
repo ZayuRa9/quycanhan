@@ -4,7 +4,6 @@ import {
   ArrowLeftRight,
   BarChart3,
   HardDrive,
-  Keyboard,
   Landmark,
   LayoutDashboard,
   LogOut,
@@ -46,14 +45,12 @@ interface SidebarLayoutProps {
   activePage: ActivePage;
   onNavigate: (page: ActivePage) => void;
   onSelectSearchResult?: (item: GlobalSearchResultItem) => void;
-  searchFocusSignal?: number;
   transactions: Transaction[];
   accounts: FinancialAccount[];
   budgets: BudgetLimit[];
   savingsGoals: SavingsGoal[];
   isOffline?: boolean;
   onOpenQuickTransaction?: () => void;
-  onOpenShortcutsHelp?: () => void;
   userEmail: string;
   userName: string;
   hasDriveToken: boolean;
@@ -66,31 +63,28 @@ interface SidebarLayoutProps {
 const NAV_ITEMS: Array<{
   id: ActivePage;
   label: string;
-  shortcut: string;
   icon: React.ComponentType<{ className?: string }>;
 }> = [
-  { id: 'overview', label: 'Tổng quan', shortcut: '1', icon: LayoutDashboard },
-  { id: 'transactions', label: 'Giao dịch', shortcut: '2', icon: ArrowLeftRight },
-  { id: 'accounts', label: 'Tài khoản', shortcut: '3', icon: Landmark },
-  { id: 'budgets', label: 'Ngân sách', shortcut: '4', icon: Target },
-  { id: 'savings', label: 'Tiết kiệm', shortcut: '5', icon: PiggyBank },
-  { id: 'reports', label: 'Báo cáo', shortcut: '6', icon: BarChart3 },
-  { id: 'archive', label: 'Lưu trữ', shortcut: '7', icon: Archive },
-  { id: 'settings', label: 'Cài đặt', shortcut: '8', icon: Settings },
+  { id: 'overview', label: 'Tổng quan', icon: LayoutDashboard },
+  { id: 'transactions', label: 'Giao dịch', icon: ArrowLeftRight },
+  { id: 'accounts', label: 'Tài khoản', icon: Landmark },
+  { id: 'budgets', label: 'Ngân sách', icon: Target },
+  { id: 'savings', label: 'Tiết kiệm', icon: PiggyBank },
+  { id: 'reports', label: 'Báo cáo', icon: BarChart3 },
+  { id: 'archive', label: 'Lưu trữ', icon: Archive },
+  { id: 'settings', label: 'Cài đặt', icon: Settings },
 ];
 
 export const SidebarLayout: React.FC<SidebarLayoutProps> = ({
   activePage,
   onNavigate,
   onSelectSearchResult,
-  searchFocusSignal = 0,
   transactions,
   accounts,
   budgets,
   savingsGoals,
   isOffline = false,
   onOpenQuickTransaction,
-  onOpenShortcutsHelp,
   userEmail,
   userName,
   hasDriveToken,
@@ -105,13 +99,6 @@ export const SidebarLayout: React.FC<SidebarLayoutProps> = ({
   const [searchFocused, setSearchFocused] = useState(false);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const searchWrapRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (searchFocusSignal > 0) {
-      searchInputRef.current?.focus();
-      setSearchFocused(true);
-    }
-  }, [searchFocusSignal]);
 
   useEffect(() => {
     const handleOutside = (e: MouseEvent) => {
@@ -169,9 +156,9 @@ export const SidebarLayout: React.FC<SidebarLayoutProps> = ({
               type="button"
               onClick={() => handleSelectPage(item.id)}
               aria-current={active ? 'page' : undefined}
-              title={`${item.label} (Phím tắt: ${item.shortcut})`}
+              title={item.label}
               className={`group w-full flex items-center ${
-                isCollapsed ? 'justify-center px-2' : 'justify-between px-3'
+                isCollapsed ? 'justify-center px-2' : 'justify-start px-3'
               } gap-2 py-2.5 rounded-xl text-sm font-semibold transition-all duration-150 whitespace-nowrap ${
                 active
                   ? 'bg-gradient-to-r from-blue-600 via-blue-600 to-indigo-600 text-white shadow-lg shadow-blue-950/50'
@@ -190,17 +177,6 @@ export const SidebarLayout: React.FC<SidebarLayoutProps> = ({
                 </span>
                 {!isCollapsed && <span className="truncate">{item.label}</span>}
               </span>
-              {!isCollapsed && (
-                <kbd
-                  className={`hidden lg:inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 text-[10px] font-mono rounded-md shrink-0 ${
-                    active
-                      ? 'bg-white/20 text-white border border-white/25'
-                      : 'bg-white/5 text-slate-400 border border-white/10 group-hover:text-slate-200'
-                  }`}
-                >
-                  {item.shortcut}
-                </kbd>
-              )}
             </button>
           );
         })}
@@ -213,20 +189,15 @@ export const SidebarLayout: React.FC<SidebarLayoutProps> = ({
             setMobileMenuOpen(false);
             onOpenQuickTransaction();
           }}
-          title="Mở nhanh modal tạo giao dịch (Phím tắt: N)"
+          title="Tạo nhanh giao dịch"
           className={`w-full flex items-center ${
-            isCollapsed ? 'justify-center px-2' : 'justify-between px-3'
+            isCollapsed ? 'justify-center px-2' : 'justify-start px-3'
           } gap-2 py-2.5 rounded-xl bg-emerald-500/15 border border-emerald-400/35 text-emerald-200 hover:bg-emerald-500/25 hover:text-white text-xs font-bold transition-all whitespace-nowrap`}
         >
           <span className="flex items-center gap-2">
             <Plus className="w-4 h-4 text-emerald-300 shrink-0" />
             {!isCollapsed && <span>Tạo nhanh giao dịch</span>}
           </span>
-          {!isCollapsed && (
-            <kbd className="hidden lg:inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 text-[10px] font-mono rounded-md bg-emerald-400/20 text-emerald-100 border border-emerald-300/30">
-              N
-            </kbd>
-          )}
         </button>
       )}
     </div>
@@ -234,29 +205,6 @@ export const SidebarLayout: React.FC<SidebarLayoutProps> = ({
 
   const renderAccountFooter = (isCollapsed = false) => (
     <div className="pt-3 border-t border-white/10 space-y-2.5">
-      {onOpenShortcutsHelp && (
-        <button
-          type="button"
-          onClick={() => {
-            setMobileMenuOpen(false);
-            onOpenShortcutsHelp();
-          }}
-          title="Xem danh sách phím tắt (Phím tắt: ?)"
-          className={`w-full flex items-center ${
-            isCollapsed ? 'justify-center px-2' : 'justify-between px-3'
-          } gap-2 py-2 rounded-xl bg-white/5 border border-white/10 text-slate-300 hover:text-white hover:bg-white/10 text-xs font-semibold transition-colors whitespace-nowrap`}
-        >
-          <span className="inline-flex items-center gap-2">
-            <Keyboard className="w-3.5 h-3.5 text-blue-300 shrink-0" />
-            {!isCollapsed && <span>Phím tắt</span>}
-          </span>
-          {!isCollapsed && (
-            <kbd className="hidden lg:inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 text-[10px] font-mono rounded-md bg-white/10 text-slate-200 border border-white/15">
-              ?
-            </kbd>
-          )}
-        </button>
-      )}
 
       {!isCollapsed ? (
         <div className="px-3 py-2 rounded-xl bg-white/5 border border-white/10 space-y-1.5">
@@ -451,11 +399,11 @@ export const SidebarLayout: React.FC<SidebarLayoutProps> = ({
                 setGlobalQuery(e.target.value);
                 setSearchFocused(true);
               }}
-              placeholder="Tìm nhanh toàn hệ thống: mã KT/KC/CK, giao dịch, tài khoản, ngân sách, tiết kiệm... (Ctrl+K)"
+              placeholder="Tìm nhanh toàn hệ thống: mã KT/KC/CK, giao dịch, tài khoản, ngân sách, tiết kiệm..."
               aria-label="Tìm kiếm toàn hệ thống"
-              className="w-full h-9 pl-9 pr-16 text-xs sm:text-sm bg-slate-100/80 border border-slate-200/90 rounded-xl text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:bg-white transition-all"
+              className="w-full h-9 pl-9 pr-9 text-xs sm:text-sm bg-slate-100/80 border border-slate-200/90 rounded-xl text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:bg-white transition-all"
             />
-            {globalQuery ? (
+            {globalQuery && (
               <button
                 type="button"
                 onClick={() => setGlobalQuery('')}
@@ -464,10 +412,6 @@ export const SidebarLayout: React.FC<SidebarLayoutProps> = ({
               >
                 <X className="w-3.5 h-3.5" />
               </button>
-            ) : (
-              <kbd className="hidden sm:inline-flex items-center px-1.5 py-0.5 text-[10px] font-mono text-slate-500 bg-white border border-slate-200 rounded-md absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none">
-                Ctrl+K
-              </kbd>
             )}
 
             {searchFocused && globalQuery.trim() && (
@@ -525,7 +469,7 @@ export const SidebarLayout: React.FC<SidebarLayoutProps> = ({
                 className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-gradient-to-r from-[#0B1437] to-blue-700 rounded-xl hover:opacity-95 shadow-xs transition-opacity whitespace-nowrap"
               >
                 <Plus className="w-3.5 h-3.5" />
-                <span>Giao dịch mới (N)</span>
+                <span>Giao dịch mới</span>
               </button>
             )}
           </div>
