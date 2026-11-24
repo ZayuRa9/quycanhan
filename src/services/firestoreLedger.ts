@@ -5,7 +5,6 @@ import {
   getDoc,
   getDocs,
   onSnapshot,
-  orderBy,
   query,
   runTransaction,
   serverTimestamp,
@@ -16,7 +15,13 @@ import {
   type Unsubscribe,
 } from 'firebase/firestore';
 import type { User } from 'firebase/auth';
-import { db, handleFirestoreError, OperationType } from './firebase';
+import {
+  buildFirestoreError,
+  db,
+  handleFirestoreError,
+  OperationType,
+  resolveUserEmail,
+} from './firebase';
 import type {
   AuditHistoryEntry,
   AuditLog,
@@ -79,21 +84,23 @@ function countersCol(uid: string) {
 
 export async function ensureUserProfile(user: User): Promise<UserProfile> {
   const ref = userDocRef(user.uid);
+  const resolvedEmail = resolveUserEmail(user);
+  const resolvedName = (user.displayName || resolvedEmail || 'Người dùng').slice(0, 128);
   try {
     const snap = await getDoc(ref);
     if (snap.exists()) {
       const data = snap.data() as UserProfile;
       await updateDoc(ref, {
-        email: user.email || data.email,
-        displayName: user.displayName || user.email || 'Người dùng',
+        email: (resolvedEmail || data.email || '').slice(0, 256),
+        displayName: resolvedName,
         updatedAt: serverTimestamp(),
       });
       return data;
     }
     const profile: UserProfile = {
       uid: user.uid,
-      email: user.email || '',
-      displayName: user.displayName || user.email || 'Người dùng',
+      email: resolvedEmail.slice(0, 256),
+      displayName: resolvedName,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     };
@@ -165,22 +172,51 @@ export async function updateUserWorkspaceMeta(
   }
 }
 
+function getCreatedAtMillis(value: unknown): number {
+  if (!value) return 0;
+  if (typeof value === 'object' && value !== null && 'toMillis' in value) {
+    const fn = (value as { toMillis?: () => number }).toMillis;
+    if (typeof fn === 'function') return fn.call(value);
+  }
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
+  return 0;
+}
+
+function forwardSubscriptionError(
+  err: unknown,
+  operation: OperationType,
+  path: string,
+  onError?: (error: Error) => void
+) {
+  const formatted = buildFirestoreError(err, operation, path);
+  if (onError) {
+    onError(formatted);
+    return;
+  }
+  throw formatted;
+}
+
 export function subscribeUserProfile(
   uid: string,
-  onData: (profile: UserProfile | null) => void
+  onData: (profile: UserProfile | null) => void,
+  onError?: (error: Error) => void
 ): Unsubscribe {
   return onSnapshot(
     userDocRef(uid),
     (snap) => {
       onData(snap.exists() ? (snap.data() as UserProfile) : null);
     },
-    (err) => handleFirestoreError(err, OperationType.GET, `users/${uid}`)
+    (err) => forwardSubscriptionError(err, OperationType.GET, `users/${uid}`, onError)
   );
 }
 
 export function subscribeAccounts(
   uid: string,
-  onData: (accounts: FinancialAccount[]) => void
+  onData: (accounts: FinancialAccount[]) => void,
+  onError?: (error: Error) => void
 ): Unsubscribe {
   const q = query(accountsCol(uid), where('userId', '==', uid));
   return onSnapshot(
@@ -190,13 +226,14 @@ export function subscribeAccounts(
       list.sort((a, b) => a.name.localeCompare(b.name, 'vi'));
       onData(list);
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, `users/${uid}/accounts`)
+    (err) => forwardSubscriptionError(err, OperationType.LIST, `users/${uid}/accounts`, onError)
   );
 }
 
 export function subscribeTransactions(
   uid: string,
-  onData: (transactions: Transaction[]) => void
+  onData: (transactions: Transaction[]) => void,
+  onError?: (error: Error) => void
 ): Unsubscribe {
   const q = query(transactionsCol(uid), where('userId', '==', uid));
   return onSnapshot(
@@ -211,13 +248,14 @@ export function subscribeTransactions(
       });
       onData(list);
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, `users/${uid}/transactions`)
+    (err) => forwardSubscriptionError(err, OperationType.LIST, `users/${uid}/transactions`, onError)
   );
 }
 
 export function subscribeBudgets(
   uid: string,
-  onData: (budgets: BudgetLimit[]) => void
+  onData: (budgets: BudgetLimit[]) => void,
+  onError?: (error: Error) => void
 ): Unsubscribe {
   const q = query(budgetsCol(uid), where('userId', '==', uid));
   return onSnapshot(
@@ -227,13 +265,14 @@ export function subscribeBudgets(
       list.sort((a, b) => a.name.localeCompare(b.name, 'vi'));
       onData(list);
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, `users/${uid}/budgets`)
+    (err) => forwardSubscriptionError(err, OperationType.LIST, `users/${uid}/budgets`, onError)
   );
 }
 
 export function subscribeSavingsGoals(
   uid: string,
-  onData: (goals: SavingsGoal[]) => void
+  onData: (goals: SavingsGoal[]) => void,
+  onError?: (error: Error) => void
 ): Unsubscribe {
   const q = query(savingsGoalsCol(uid), where('userId', '==', uid));
   return onSnapshot(
@@ -243,13 +282,14 @@ export function subscribeSavingsGoals(
       list.sort((a, b) => a.name.localeCompare(b.name, 'vi'));
       onData(list);
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, `users/${uid}/savingsGoals`)
+    (err) => forwardSubscriptionError(err, OperationType.LIST, `users/${uid}/savingsGoals`, onError)
   );
 }
 
 export function subscribeSavingsContributions(
   uid: string,
-  onData: (contributions: SavingsContribution[]) => void
+  onData: (contributions: SavingsContribution[]) => void,
+  onError?: (error: Error) => void
 ): Unsubscribe {
   const q = query(savingsContributionsCol(uid), where('userId', '==', uid));
   return onSnapshot(
@@ -259,45 +299,47 @@ export function subscribeSavingsContributions(
       list.sort((a, b) => b.date.localeCompare(a.date));
       onData(list);
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, `users/${uid}/savingsContributions`)
+    (err) =>
+      forwardSubscriptionError(
+        err,
+        OperationType.LIST,
+        `users/${uid}/savingsContributions`,
+        onError
+      )
   );
 }
 
 export function subscribeBackupHistory(
   uid: string,
-  onData: (records: BackupRecord[]) => void
+  onData: (records: BackupRecord[]) => void,
+  onError?: (error: Error) => void
 ): Unsubscribe {
-  const q = query(
-    backupHistoryCol(uid),
-    where('userId', '==', uid),
-    orderBy('createdAt', 'desc')
-  );
+  const q = query(backupHistoryCol(uid), where('userId', '==', uid));
   return onSnapshot(
     q,
     (snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<BackupRecord, 'id'>) }));
+      list.sort((a, b) => getCreatedAtMillis(b.createdAt) - getCreatedAtMillis(a.createdAt));
       onData(list);
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, `users/${uid}/backupHistory`)
+    (err) => forwardSubscriptionError(err, OperationType.LIST, `users/${uid}/backupHistory`, onError)
   );
 }
 
 export function subscribeAuditLogs(
   uid: string,
-  onData: (logs: AuditLog[]) => void
+  onData: (logs: AuditLog[]) => void,
+  onError?: (error: Error) => void
 ): Unsubscribe {
-  const q = query(
-    auditLogsCol(uid),
-    where('userId', '==', uid),
-    orderBy('createdAt', 'desc')
-  );
+  const q = query(auditLogsCol(uid), where('userId', '==', uid));
   return onSnapshot(
     q,
     (snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<AuditLog, 'id'>) }));
+      list.sort((a, b) => getCreatedAtMillis(b.createdAt) - getCreatedAtMillis(a.createdAt));
       onData(list);
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, `users/${uid}/auditLogs`)
+    (err) => forwardSubscriptionError(err, OperationType.LIST, `users/${uid}/auditLogs`, onError)
   );
 }
 

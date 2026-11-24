@@ -68,6 +68,8 @@ export async function googleSignIn(): Promise<{
     try {
       isSigningIn = true;
       const authProvider = new GoogleAuthProvider();
+      authProvider.addScope('email');
+      authProvider.addScope('profile');
       authProvider.setCustomParameters({ prompt: 'select_account' });
       const result = await signInWithPopup(auth, authProvider);
       return { user: result.user, accessToken: cachedAccessToken };
@@ -141,6 +143,13 @@ export async function logout(): Promise<void> {
   await signOut(auth);
 }
 
+export function resolveUserEmail(user: User | null | undefined): string {
+  if (!user) return '';
+  if (user.email && user.email.trim()) return user.email.trim();
+  const providerEmail = user.providerData?.find((p) => p?.email && p.email.trim())?.email;
+  return providerEmail ? providerEmail.trim() : '';
+}
+
 export enum OperationType {
   CREATE = 'create',
   UPDATE = 'update',
@@ -167,16 +176,16 @@ export interface FirestoreErrorInfo {
   };
 }
 
-export function handleFirestoreError(
+export function buildFirestoreError(
   error: unknown,
   operationType: OperationType,
   path: string | null
-): never {
+): Error {
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
       userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
+      email: resolveUserEmail(auth.currentUser) || auth.currentUser?.email,
       emailVerified: auth.currentUser?.emailVerified,
       isAnonymous: auth.currentUser?.isAnonymous,
       tenantId: auth.currentUser?.tenantId,
@@ -190,5 +199,13 @@ export function handleFirestoreError(
     path,
   };
   console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+  return new Error(JSON.stringify(errInfo));
+}
+
+export function handleFirestoreError(
+  error: unknown,
+  operationType: OperationType,
+  path: string | null
+): never {
+  throw buildFirestoreError(error, operationType, path);
 }

@@ -24,6 +24,7 @@ import {
   googleSignIn,
   initAuth,
   logout,
+  resolveUserEmail,
 } from './services/firebase';
 import {
   createAccount,
@@ -133,6 +134,8 @@ function FinanceAppShell() {
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [accountsLoaded, setAccountsLoaded] = useState(false);
   const [transactionsLoaded, setTransactionsLoaded] = useState(false);
+  const [dataLoadError, setDataLoadError] = useState<string | null>(null);
+  const [reloadNonce, setReloadNonce] = useState(0);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
 
   useEffect(() => {
@@ -197,36 +200,86 @@ function FinanceAppShell() {
       setAuditLogs([]);
       setAccountsLoaded(false);
       setTransactionsLoaded(false);
+      setDataLoadError(null);
       return;
     }
 
+    setDataLoadError(null);
+    let active = true;
+
+    const handleSubError = (err: Error, critical = false) => {
+      if (!active) return;
+      let readable = err.message || 'Không thể tải dữ liệu từ Firestore.';
+      try {
+        const parsed = JSON.parse(err.message);
+        if (parsed?.error) readable = parsed.error;
+      } catch {
+        // Keep raw error message
+      }
+      if (critical) {
+        setDataLoadError(readable);
+        setAccountsLoaded(true);
+        setTransactionsLoaded(true);
+      }
+    };
+
     ensureUserProfile(user).catch((err) => {
+      if (!active) return;
       console.error('Failed to ensure user profile:', err);
     });
 
-    const unsubProfile = subscribeUserProfile(user.uid, (nextProfile) => {
-      setProfile(nextProfile);
-      setOptimisticCategories(null);
-      setOptimisticIncomeCategories(null);
-    });
-    const unsubAccounts = subscribeAccounts(user.uid, (rows) => {
-      setAccounts(rows);
-      setAccountsLoaded(true);
-    });
-    const unsubTransactions = subscribeTransactions(user.uid, (rows) => {
-      setTransactions(rows);
-      setTransactionsLoaded(true);
-    });
-    const unsubBudgets = subscribeBudgets(user.uid, setBudgets);
-    const unsubSavingsGoals = subscribeSavingsGoals(user.uid, setSavingsGoals);
+    const unsubProfile = subscribeUserProfile(
+      user.uid,
+      (nextProfile) => {
+        setProfile(nextProfile);
+        setOptimisticCategories(null);
+        setOptimisticIncomeCategories(null);
+      },
+      (err) => handleSubError(err, false)
+    );
+    const unsubAccounts = subscribeAccounts(
+      user.uid,
+      (rows) => {
+        setAccounts(rows);
+        setAccountsLoaded(true);
+        setDataLoadError(null);
+      },
+      (err) => handleSubError(err, true)
+    );
+    const unsubTransactions = subscribeTransactions(
+      user.uid,
+      (rows) => {
+        setTransactions(rows);
+        setTransactionsLoaded(true);
+        setDataLoadError(null);
+      },
+      (err) => handleSubError(err, true)
+    );
+    const unsubBudgets = subscribeBudgets(user.uid, setBudgets, (err) => handleSubError(err, false));
+    const unsubSavingsGoals = subscribeSavingsGoals(user.uid, setSavingsGoals, (err) =>
+      handleSubError(err, false)
+    );
     const unsubSavingsContribs = subscribeSavingsContributions(
       user.uid,
-      setSavingsContributions
+      setSavingsContributions,
+      (err) => handleSubError(err, false)
     );
-    const unsubBackupHistory = subscribeBackupHistory(user.uid, setBackupHistory);
-    const unsubLogs = subscribeAuditLogs(user.uid, setAuditLogs);
+    const unsubBackupHistory = subscribeBackupHistory(user.uid, setBackupHistory, (err) =>
+      handleSubError(err, false)
+    );
+    const unsubLogs = subscribeAuditLogs(user.uid, setAuditLogs, (err) =>
+      handleSubError(err, false)
+    );
+
+    const safetyTimer = window.setTimeout(() => {
+      if (!active) return;
+      setAccountsLoaded(true);
+      setTransactionsLoaded(true);
+    }, 8000);
 
     return () => {
+      active = false;
+      window.clearTimeout(safetyTimer);
       unsubProfile();
       unsubAccounts();
       unsubTransactions();
@@ -236,7 +289,7 @@ function FinanceAppShell() {
       unsubBackupHistory();
       unsubLogs();
     };
-  }, [user]);
+  }, [user, reloadNonce]);
 
   const reminderLeadDays = profile?.reminderLeadDays ?? 3;
   const defaultPageSize = profile?.defaultPageSize ?? 15;
@@ -1200,7 +1253,8 @@ function FinanceAppShell() {
     );
   }
 
-  const actorEmail = user.email || user.uid;
+  const resolvedEmail = resolveUserEmail(user);
+  const actorEmail = resolvedEmail || user.displayName || user.uid;
   const initialDataReady = accountsLoaded && transactionsLoaded;
 
   return (
@@ -1225,8 +1279,8 @@ function FinanceAppShell() {
           setQuickTxModalOpen(true);
         }}
         onOpenShortcutsHelp={() => setShortcutsHelpOpen((prev) => !prev)}
-        userEmail={actorEmail}
-        userName={user.displayName || actorEmail}
+        userEmail={resolvedEmail || 'Tài khoản Google'}
+        userName={user.displayName || resolvedEmail || 'Người dùng'}
         hasDriveToken={Boolean(accessToken)}
         isConnectingDrive={isConnectingDrive}
         onReconnectDrive={handleReconnectDrive}
@@ -1234,6 +1288,39 @@ function FinanceAppShell() {
       >
         {!initialDataReady ? (
           <DashboardSkeleton />
+        ) : dataLoadError ? (
+          <div className="max-w-xl mx-auto my-10 bg-white border border-rose-200 rounded-2xl p-6 shadow-sm space-y-4">
+            <div className="space-y-1">
+              <h2 className="font-display text-lg font-bold text-slate-900">
+                Không thể tải dữ liệu Sổ Quỹ
+              </h2>
+              <p className="text-sm text-rose-700 break-words">{dataLoadError}</p>
+              <p className="text-xs text-slate-500">
+                Vui lòng kiểm tra kết nối mạng hoặc nhấn tải lại để đồng bộ lại phiên đăng nhập hiện tại.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setDataLoadError(null);
+                  setAccountsLoaded(false);
+                  setTransactionsLoaded(false);
+                  setReloadNonce((n) => n + 1);
+                }}
+                className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition-colors"
+              >
+                Thử tải lại dữ liệu
+              </button>
+              <button
+                type="button"
+                onClick={handleSignOut}
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition-colors"
+              >
+                Đăng xuất &amp; đăng nhập lại
+              </button>
+            </div>
+          </div>
         ) : (
           <>
             {activePage === 'overview' && (
@@ -1247,7 +1334,7 @@ function FinanceAppShell() {
                 reminderLeadDays={reminderLeadDays}
                 spreadsheetId={profile?.spreadsheetId}
                 hasWorkspaceToken={Boolean(accessToken)}
-                userEmail={user.email || undefined}
+                userEmail={resolvedEmail || undefined}
                 pushPermission={pushPermission}
                 pushEnabled={pushEnabled}
                 onTogglePush={handleTogglePush}
@@ -1268,7 +1355,7 @@ function FinanceAppShell() {
                 externalSearchQuery={txSearchHint}
                 onOpenCategoryManager={handleOpenCategoryManager}
                 hasDriveToken={Boolean(accessToken)}
-                userEmail={user.email || undefined}
+                userEmail={resolvedEmail || undefined}
                 pushPermission={pushPermission}
                 pushEnabled={pushEnabled}
                 onTogglePush={handleTogglePush}
@@ -1366,7 +1453,7 @@ function FinanceAppShell() {
                 transactions={transactions}
                 accounts={accounts}
                 savingsGoals={savingsGoals}
-                userEmail={user.email || undefined}
+                userEmail={resolvedEmail || undefined}
                 onExportExcel={(year) => {
                   exportFinanceWorkbook({
                     transactions,

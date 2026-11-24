@@ -6,7 +6,7 @@
       "type": "object",
       "properties": {
         "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "email": { "type": "string", "minLength": 3, "maxLength": 256 },
+        "email": { "type": "string", "minLength": 0, "maxLength": 256 },
         "displayName": { "type": "string", "minLength": 1, "maxLength": 128 },
         "driveRootFolderId": { "type": "string", "maxLength": 128 },
         "spreadsheetId": { "type": "string", "maxLength": 128 },

@@ -18,7 +18,7 @@ service cloud.firestore {
     }
 
     function isSignedIn() {
-      return request.auth != null && request.auth.token.email_verified == true;
+      return request.auth != null;
     }
 
     function isOwner(userId) {
@@ -35,7 +35,7 @@ service cloud.firestore {
         ])
         && data.uid == userId
         && data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128
-        && data.email is string && data.email.size() >= 3 && data.email.size() <= 256
+        && data.email is string && data.email.size() <= 256
         && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 128
         && (!('driveRootFolderId' in data) || (data.driveRootFolderId is string && data.driveRootFolderId.size() <= 128))
         && (!('spreadsheetId' in data) || (data.spreadsheetId is string && data.spreadsheetId.size() <= 128))
