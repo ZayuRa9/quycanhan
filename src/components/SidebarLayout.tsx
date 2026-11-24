@@ -57,6 +57,7 @@ interface SidebarLayoutProps {
   userEmail: string;
   userName: string;
   hasDriveToken: boolean;
+  isConnectingDrive?: boolean;
   onReconnectDrive: () => void;
   onSignOut: () => void;
   children: React.ReactNode;
@@ -93,6 +94,7 @@ export const SidebarLayout: React.FC<SidebarLayoutProps> = ({
   userEmail,
   userName,
   hasDriveToken,
+  isConnectingDrive = false,
   onReconnectDrive,
   onSignOut,
   children,
@@ -263,38 +265,42 @@ export const SidebarLayout: React.FC<SidebarLayoutProps> = ({
               <HardDrive className="w-3.5 h-3.5 text-blue-400 shrink-0" />
               <span>Google Drive</span>
             </span>
-            {hasDriveToken ? (
-              <span className="text-emerald-400 font-semibold">Đã kết nối</span>
-            ) : (
-              <button
-                type="button"
-                onClick={onReconnectDrive}
-                className="text-amber-300 font-semibold underline underline-offset-2 hover:text-amber-200"
-              >
-                Kết nối lại
-              </button>
-            )}
+            <span
+              className={`font-semibold ${
+                hasDriveToken ? 'text-emerald-400' : 'text-slate-400'
+              }`}
+            >
+              {hasDriveToken ? 'Đã kết nối' : 'Tùy chọn'}
+            </span>
           </div>
           {!hasDriveToken && (
             <button
               type="button"
+              disabled={isConnectingDrive}
               onClick={onReconnectDrive}
-              className="w-full flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-amber-500/20 border border-amber-400/40 text-amber-200 text-xs font-semibold hover:bg-amber-500/30 transition-colors whitespace-nowrap"
+              className="w-full flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-amber-500/20 border border-amber-400/40 text-amber-200 text-xs font-semibold hover:bg-amber-500/30 disabled:opacity-60 disabled:cursor-wait transition-colors whitespace-nowrap"
             >
               <HardDrive className="w-3.5 h-3.5 shrink-0" />
-              <span>Kết nối Google Drive</span>
+              <span>{isConnectingDrive ? 'Đang kết nối...' : 'Kết nối Google Drive'}</span>
             </button>
           )}
         </div>
       ) : (
         <button
           type="button"
+          disabled={hasDriveToken || isConnectingDrive}
           onClick={hasDriveToken ? undefined : onReconnectDrive}
-          title={hasDriveToken ? 'Google Drive đã kết nối' : 'Kết nối lại Google Drive'}
+          title={
+            hasDriveToken
+              ? 'Google Drive đã kết nối'
+              : isConnectingDrive
+                ? 'Đang mở cửa sổ kết nối Google Drive...'
+                : 'Kết nối Google Drive'
+          }
           className={`w-full flex items-center justify-center py-2 rounded-xl border ${
             hasDriveToken
               ? 'bg-emerald-500/10 border-emerald-400/30 text-emerald-300'
-              : 'bg-amber-500/20 border-amber-400/40 text-amber-200'
+              : 'bg-amber-500/20 border-amber-400/40 text-amber-200 disabled:opacity-60'
           }`}
         >
           <HardDrive className="w-4 h-4" />

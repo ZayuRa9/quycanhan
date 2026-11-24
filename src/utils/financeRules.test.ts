@@ -24,6 +24,7 @@ import {
   formatFirebaseAuthError,
   formatVND,
   getDriveFolderParts,
+  isPopupCancelledError,
   mergeExpenseCategories,
   moveExpenseCategory,
   normalizeTransactionStatus,
@@ -1420,6 +1421,10 @@ test('formatFirebaseAuthError translates common OAuth and testing-mode errors in
   );
   assert.ok(testingMsg.includes('Publish App'));
   assert.ok(testingMsg.includes('Google Cloud Console'));
+
+  assert.equal(isPopupCancelledError({ code: 'auth/popup-closed-by-user', message: 'closed' }), true);
+  assert.equal(isPopupCancelledError(new Error('Firebase: Error (auth/cancelled-popup-request).')), true);
+  assert.equal(isPopupCancelledError(new Error('Firebase: Error (auth/popup-blocked).')), false);
 });
 
 

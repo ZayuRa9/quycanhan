@@ -1721,15 +1721,32 @@ export function searchGlobalEntities(params: {
   return results.slice(0, limit);
 }
 
-export function formatFirebaseAuthError(err: unknown): string {
-  const raw = err instanceof Error ? err.message : String(err || '');
-  const lower = raw.toLowerCase();
+function extractAuthErrorText(err: unknown): string {
+  if (!err) return '';
+  if (typeof err === 'string') return err;
+  if (typeof err === 'object') {
+    const record = err as { code?: unknown; message?: unknown };
+    const code = typeof record.code === 'string' ? record.code : '';
+    const message = typeof record.message === 'string' ? record.message : '';
+    return `${code} ${message}`.trim();
+  }
+  return String(err);
+}
 
-  if (
+export function isPopupCancelledError(err: unknown): boolean {
+  const lower = extractAuthErrorText(err).toLowerCase();
+  return (
     lower.includes('popup-closed-by-user') ||
     lower.includes('cancelled-popup-request')
-  ) {
-    return 'Cửa sổ đăng nhập Google đã được đóng trước khi hoàn tất. Vui lòng thử lại.';
+  );
+}
+
+export function formatFirebaseAuthError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : extractAuthErrorText(err);
+  const lower = extractAuthErrorText(err).toLowerCase();
+
+  if (isPopupCancelledError(err)) {
+    return 'Cửa sổ xác thực Google đã được đóng trước khi hoàn tất. Vui lòng thử lại.';
   }
   if (lower.includes('popup-blocked')) {
     return 'Trình duyệt đang chặn cửa sổ bật lên (Popup). Vui lòng cho phép Popup cho trang web này rồi thử lại.';
@@ -1755,4 +1772,5 @@ export function formatFirebaseAuthError(err: unknown): string {
 
   return raw || 'Đăng nhập Google thất bại. Vui lòng thử lại.';
 }
+
 

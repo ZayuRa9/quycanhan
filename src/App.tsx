@@ -86,6 +86,7 @@ import {
   evaluateBudget,
   formatFirebaseAuthError,
   formatVND,
+  isPopupCancelledError,
   type GlobalSearchResultItem,
 } from './utils/financeRules';
 import {
@@ -101,6 +102,7 @@ function FinanceAppShell() {
   const [user, setUser] = useState<User | null>(null);
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [isSigningIn, setIsSigningIn] = useState(false);
+  const [isConnectingDrive, setIsConnectingDrive] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
   const [activePage, setActivePage] = useState<ActivePage>('overview');
@@ -301,7 +303,8 @@ function FinanceAppShell() {
   };
 
   const handleReconnectDrive = async () => {
-    setIsSigningIn(true);
+    if (isConnectingDrive) return;
+    setIsConnectingDrive(true);
     setAuthError(null);
     try {
       const result = await connectGoogleWorkspace(true);
@@ -313,10 +316,17 @@ function FinanceAppShell() {
         'Sẵn sàng tải chứng từ Drive, đồng bộ Sheets & lịch nhắc'
       );
     } catch (err) {
-      console.error('Reconnect Drive error:', err);
-      addToast('error', 'Chưa kết nối được Google Drive', formatFirebaseAuthError(err));
+      if (isPopupCancelledError(err)) {
+        addToast(
+          'info',
+          'Đã đóng cửa sổ kết nối Google Workspace',
+          'Sổ quỹ vẫn hoạt động bình thường; bạn có thể kết nối lại bất cứ lúc nào.'
+        );
+      } else {
+        addToast('error', 'Chưa kết nối được Google Drive', formatFirebaseAuthError(err));
+      }
     } finally {
-      setIsSigningIn(false);
+      setIsConnectingDrive(false);
     }
   };
 
@@ -1218,6 +1228,7 @@ function FinanceAppShell() {
         userEmail={actorEmail}
         userName={user.displayName || actorEmail}
         hasDriveToken={Boolean(accessToken)}
+        isConnectingDrive={isConnectingDrive}
         onReconnectDrive={handleReconnectDrive}
         onSignOut={handleSignOut}
       >

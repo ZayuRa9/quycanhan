@@ -25,6 +25,8 @@ export const WORKSPACE_SCOPES = [
 // Strictly in-memory OAuth token cache (never stored in localStorage/sessionStorage)
 let cachedAccessToken: string | null = null;
 let isSigningIn = false;
+let activeSignInPromise: Promise<{ user: User; accessToken: string | null }> | null = null;
+let activeWorkspacePromise: Promise<{ user: User; accessToken: string }> | null = null;
 
 async function testConnection() {
   try {
@@ -58,15 +60,24 @@ export async function googleSignIn(): Promise<{
   user: User;
   accessToken: string | null;
 }> {
-  try {
-    isSigningIn = true;
-    const authProvider = new GoogleAuthProvider();
-    authProvider.setCustomParameters({ prompt: 'select_account' });
-    const result = await signInWithPopup(auth, authProvider);
-    return { user: result.user, accessToken: cachedAccessToken };
-  } finally {
-    isSigningIn = false;
+  if (activeSignInPromise) {
+    return activeSignInPromise;
   }
+
+  activeSignInPromise = (async () => {
+    try {
+      isSigningIn = true;
+      const authProvider = new GoogleAuthProvider();
+      authProvider.setCustomParameters({ prompt: 'select_account' });
+      const result = await signInWithPopup(auth, authProvider);
+      return { user: result.user, accessToken: cachedAccessToken };
+    } finally {
+      isSigningIn = false;
+      activeSignInPromise = null;
+    }
+  })();
+
+  return activeSignInPromise;
 }
 
 /**
@@ -77,35 +88,44 @@ export async function connectGoogleWorkspace(forceConsent = true): Promise<{
   user: User;
   accessToken: string;
 }> {
-  try {
-    isSigningIn = true;
-    const authProvider = new GoogleAuthProvider();
-    for (const scope of WORKSPACE_SCOPES) {
-      authProvider.addScope(scope);
-    }
-    const params: Record<string, string> = {};
-    if (forceConsent) {
-      params.prompt = 'consent';
-    }
-    if (auth.currentUser?.email) {
-      params.login_hint = auth.currentUser.email;
-    }
-    if (Object.keys(params).length > 0) {
-      authProvider.setCustomParameters(params);
-    }
-
-    const result = auth.currentUser
-      ? await reauthenticateWithPopup(auth.currentUser, authProvider)
-      : await signInWithPopup(auth, authProvider);
-    const credential = GoogleAuthProvider.credentialFromResult(result);
-    if (!credential?.accessToken) {
-      throw new Error('Không lấy được mã truy cập Google Workspace từ phiên xác thực.');
-    }
-    cachedAccessToken = credential.accessToken;
-    return { user: result.user, accessToken: cachedAccessToken };
-  } finally {
-    isSigningIn = false;
+  if (activeWorkspacePromise) {
+    return activeWorkspacePromise;
   }
+
+  activeWorkspacePromise = (async () => {
+    try {
+      isSigningIn = true;
+      const authProvider = new GoogleAuthProvider();
+      for (const scope of WORKSPACE_SCOPES) {
+        authProvider.addScope(scope);
+      }
+      const params: Record<string, string> = {};
+      if (forceConsent) {
+        params.prompt = 'consent';
+      }
+      if (auth.currentUser?.email) {
+        params.login_hint = auth.currentUser.email;
+      }
+      if (Object.keys(params).length > 0) {
+        authProvider.setCustomParameters(params);
+      }
+
+      const result = auth.currentUser
+        ? await reauthenticateWithPopup(auth.currentUser, authProvider)
+        : await signInWithPopup(auth, authProvider);
+      const credential = GoogleAuthProvider.credentialFromResult(result);
+      if (!credential?.accessToken) {
+        throw new Error('Không lấy được mã truy cập Google Workspace từ phiên xác thực.');
+      }
+      cachedAccessToken = credential.accessToken;
+      return { user: result.user, accessToken: cachedAccessToken };
+    } finally {
+      isSigningIn = false;
+      activeWorkspacePromise = null;
+    }
+  })();
+
+  return activeWorkspacePromise;
 }
 
 export function getAccessToken(): string | null {
